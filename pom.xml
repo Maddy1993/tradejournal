@@ -10,6 +10,7 @@
   <packaging>pom</packaging>
   <modules>
     <module>api</module>
+    <module>dal</module>
   </modules>
 
   <properties>
@@ -22,6 +23,8 @@
 
     <vertx.version>4.4.6</vertx.version>
     <junit-jupiter.version>5.9.1</junit-jupiter.version>
+    <jdbi.version>3.41.3</jdbi.version>
+    <postgressql.version>42.6.0</postgressql.version>
   </properties>
 
   <repositories>
@@ -102,11 +105,27 @@
       </dependency>
       <dependency>
         <groupId>io.netty</groupId>
-        <artifactId>netty-resolver-dns-native-macos</artifactId>
+        <artifactId>netty-resolver-dns</artifactId>
         <version>4.1.100.Final</version>
-        <scope>runtime</scope>
+      </dependency>
+      <!-- PostgreSQL JDBC Driver -->
+      <dependency>
+        <groupId>org.postgresql</groupId>
+        <artifactId>postgresql</artifactId>
+        <version>${postgressql.version}</version>
       </dependency>
 
+      <!-- JDBI -->
+      <dependency>
+        <groupId>org.jdbi</groupId>
+        <artifactId>jdbi3-core</artifactId>
+        <version>${jdbi.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.jdbi</groupId>
+        <artifactId>jdbi3-sqlobject</artifactId>
+        <version>${jdbi.version}</version>
+      </dependency>
     </dependencies>
   </dependencyManagement>
 

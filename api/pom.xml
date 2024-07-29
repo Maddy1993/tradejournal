@@ -7,6 +7,7 @@
     <groupId>com.zenith.trade</groupId>
     <artifactId>journal</artifactId>
     <version>1.0.0-SNAPSHOT</version>
+    <relativePath>../pom.xml</relativePath>
   </parent>
 
   <groupId>org.zenith.com</groupId>
@@ -16,9 +17,8 @@
     <maven.compiler.source>17</maven.compiler.source>
     <maven.compiler.target>17</maven.compiler.target>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-
-    <main.verticle>org.openapitools.server.api.MainApiVerticle</main.verticle>
-<!--    <launcher.class>io.vertx.core.Launcher</launcher.class>-->
+<!--    <main.verticle>org.openapitools.server.api.MainApiVerticle</main.verticle>-->
+    <main.class>com.zenith.trade.journal.Launcher</main.class>
   </properties>
 
   <dependencies>
@@ -89,8 +89,7 @@
     </dependency>
     <dependency>
       <groupId>io.netty</groupId>
-      <artifactId>netty-resolver-dns-native-macos</artifactId>
-      <scope>runtime</scope>
+      <artifactId>netty-resolver-dns</artifactId>
     </dependency>
   </dependencies>
 
@@ -118,6 +117,14 @@
             </configuration>
           </execution>
         </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.0.0</version>
+        <configuration>
+          <mainClass>${main.class}</mainClass>
+        </configuration>
       </plugin>
     </plugins>
   </build>

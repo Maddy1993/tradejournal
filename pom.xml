@@ -29,16 +29,6 @@
 
   <repositories>
     <repository>
-      <id>libs-snapshot</id>
-      <name>Oracle Libs Snapshot</name>
-      <url>https://artifactory.oci.oraclecorp.com/libs-snapshot</url>
-    </repository>
-    <repository>
-      <id>libs-release</id>
-      <name>Oracle Libs Release</name>
-      <url>https://artifactory.oci.oraclecorp.com/libs-release</url>
-    </repository>
-    <repository>
       <id>central</id>
       <name>Maven Central</name>
       <url>https://repo.maven.apache.org/maven2</url>
@@ -132,33 +122,29 @@
   <dependencies>
     <dependency>
       <groupId>io.vertx</groupId>
+      <artifactId>vertx-web</artifactId>
+      <version>${vertx.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.vertx</groupId>
+      <artifactId>vertx-config</artifactId>
+      <version>${vertx.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.vertx</groupId>
       <artifactId>vertx-pg-client</artifactId>
-      <version>4.4.6</version>
+      <version>${vertx.version}</version>
     </dependency>
     <dependency>
       <groupId>io.vertx</groupId>
-      <artifactId>vertx-grpc-server</artifactId>
-      <version>4.4.6</version>
+      <artifactId>vertx-sql-client</artifactId>
+      <version>${vertx.version}</version>
     </dependency>
+    <!-- Jackson for JSON -->
     <dependency>
-      <groupId>io.vertx</groupId>
-      <artifactId>vertx-json-schema</artifactId>
-      <version>4.4.6</version>
-    </dependency>
-    <dependency>
-      <groupId>io.vertx</groupId>
-      <artifactId>vertx-shell</artifactId>
-      <version>4.4.6</version>
-    </dependency>
-    <dependency>
-      <groupId>io.vertx</groupId>
-      <artifactId>vertx-redis-client</artifactId>
-      <version>4.4.6</version>
-    </dependency>
-    <dependency>
-      <groupId>io.vertx</groupId>
-      <artifactId>vertx-grpc-client</artifactId>
-      <version>4.4.6</version>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>2.15.2</version>
     </dependency>
     <dependency>
       <groupId>com.ongres.scram</groupId>
@@ -196,6 +182,12 @@
     <dependency>
       <groupId>com.google.code.gson</groupId>
       <artifactId>gson</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <version>1.18.30</version>
+      <scope>provided</scope>
     </dependency>
   </dependencies>
 

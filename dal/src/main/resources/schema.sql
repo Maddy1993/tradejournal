@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS dividends (
     amount DECIMAL(15, 6) NOT NULL,
     pay_date DATE NOT NULL,
     ex_date DATE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(account_id, symbol, pay_date)
 );
 
 -- Market Data (Historical Prices for Charts/P&L)

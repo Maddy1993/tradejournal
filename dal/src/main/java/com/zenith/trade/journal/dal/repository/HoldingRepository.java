@@ -25,6 +25,14 @@ public class HoldingRepository {
                 .map(this::mapToHoldings);
     }
 
+    public Future<List<Holding>> findAllByUserId(UUID userId) {
+        return client
+                .preparedQuery(
+                        "SELECT h.* FROM holdings h JOIN broker_accounts a ON h.account_id = a.id WHERE a.user_id = $1")
+                .execute(Tuple.of(userId))
+                .map(this::mapToHoldings);
+    }
+
     public Future<Holding> save(Holding holding) {
         String sql = "INSERT INTO holdings (account_id, symbol, quantity, average_cost, current_price, market_value, last_updated) "
                 +

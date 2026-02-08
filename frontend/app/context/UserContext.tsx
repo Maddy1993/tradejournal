@@ -20,6 +20,7 @@ interface UserContextType {
     connectBroker: () => Promise<string>;
     syncBrokers: () => Promise<void>;
     fetchBrokers: () => Promise<void>;
+    logout: () => void;
 }
 
 const UserContext = createContext<UserContextType | undefined>(undefined);
@@ -51,27 +52,56 @@ export function UserProvider({ children }: { children: ReactNode }) {
     const registerUser = async (email: string) => {
         try {
             setIsLoading(true);
-            // Use email as userId (could also hash it or generate UUID)
-            const response = await fetch('http://localhost:8080/api/brokerage/register', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId: email }),
-            });
+            // First, try to fetch existing user secret (acts as login)
+            const loginResponse = await fetch(`http://localhost:8080/api/users/${email}/secret`);
 
-            if (!response.ok) throw new Error('Registration failed');
+            if (loginResponse.ok) {
+                // User exists, retrieve their secret
+                const data = await loginResponse.json();
+                const secret = data.userSecret;
 
-            const data = await response.json();
-            const secret = data.userSecret;
+                // Store credentials
+                localStorage.setItem('userId', email);
+                localStorage.setItem('userSecret', secret);
+                localStorage.setItem('email', email);
 
-            // Store in state and localStorage
-            setUserId(email);
-            setUserSecret(secret);
-            setEmail(email);
-            localStorage.setItem('userId', email);
-            localStorage.setItem('userSecret', secret);
-            localStorage.setItem('email', email);
+                setUserId(email);
+                setUserSecret(secret);
+                setEmail(email);
+
+                // Fetch brokers for existing user
+                await fetchBrokersInternal(email, secret);
+                return; // Exit after successful login
+            }
+
+            // User doesn't exist (404), proceed with registration
+            if (loginResponse.status === 404) {
+                const response = await fetch('http://localhost:8080/api/brokerage/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: email }),
+                });
+
+                if (!response.ok) {
+                    throw new Error('Registration failed');
+                }
+
+                const data = await response.json();
+                const secret = data.userSecret;
+
+                // Store credentials locally
+                localStorage.setItem('userId', email);
+                localStorage.setItem('userSecret', secret);
+                localStorage.setItem('email', email);
+
+                setUserId(email);
+                setUserSecret(secret);
+                setEmail(email);
+            } else {
+                throw new Error('Unexpected error during login/registration');
+            }
         } catch (error) {
-            console.error('Registration error:', error);
+            console.error('Error during registration/login:', error);
             throw error;
         } finally {
             setIsLoading(false);
@@ -94,20 +124,22 @@ export function UserProvider({ children }: { children: ReactNode }) {
     };
 
     const syncBrokers = async () => {
-        if (!userId || !userSecret) throw new Error('User not registered');
+        if (!userId) throw new Error('User not registered');
 
         setIsLoading(true);
         try {
             const response = await fetch('http://localhost:8080/api/brokerage/sync', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId, userSecret }),
+                body: JSON.stringify({ userId }), // Only send userId (email)
             });
 
             if (!response.ok) throw new Error('Sync failed');
 
             // Refresh broker list after sync
-            await fetchBrokersInternal(userId, userSecret);
+            if (userSecret) {
+                await fetchBrokersInternal(userId, userSecret);
+            }
         } catch (error) {
             console.error('Sync error:', error);
             throw error;
@@ -147,6 +179,20 @@ export function UserProvider({ children }: { children: ReactNode }) {
         }
     };
 
+    const logout = () => {
+        // Clear all user data from localStorage
+        localStorage.removeItem('userId');
+        localStorage.removeItem('userSecret');
+        localStorage.removeItem('email');
+
+        // Reset all state
+        setUserId(null);
+        setUserSecret(null);
+        setEmail(null);
+        setConnectedBrokers([]);
+        setIsLoading(false);
+    };
+
     return (
         <UserContext.Provider
             value={{
@@ -159,6 +205,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
                 connectBroker,
                 syncBrokers,
                 fetchBrokers,
+                logout,
             }}
         >
             {children}

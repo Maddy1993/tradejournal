@@ -1,10 +1,15 @@
 package com.zenith.trade.journal;
 
 import com.zenith.trade.journal.dal.repository.BrokerAccountRepository;
+import com.zenith.trade.journal.dal.repository.DividendRepository;
 import com.zenith.trade.journal.dal.repository.HoldingRepository;
 import com.zenith.trade.journal.dal.repository.UserRepository;
+import com.zenith.trade.journal.dal.repository.TradeRepository;
 import com.zenith.trade.journal.handler.BrokerageHandler;
 import com.zenith.trade.journal.handler.DashboardHandler;
+import com.zenith.trade.journal.handler.DividendHandler;
+import com.zenith.trade.journal.handler.PerformanceHandler;
+import com.zenith.trade.journal.handler.TradeHandler;
 import com.zenith.trade.journal.service.SnapTradeService;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Promise;
@@ -25,13 +30,7 @@ public class MainVerticle extends AbstractVerticle {
 
         @Override
         public void start(Promise<Void> startPromise) {
-                // Load .env
-                io.github.cdimascio.dotenv.Dotenv dotenv = io.github.cdimascio.dotenv.Dotenv.configure()
-                                .ignoreIfMissing()
-                                .load();
-                dotenv.entries().forEach(entry -> System.setProperty(entry.getKey(), entry.getValue()));
-
-                // Database Configuration
+                // Database configuration
                 PgConnectOptions connectOptions = new PgConnectOptions()
                                 .setPort(Integer.parseInt(System.getProperty("DB_PORT", "5432")))
                                 .setHost(System.getProperty("DB_HOST", "localhost"))
@@ -39,55 +38,81 @@ public class MainVerticle extends AbstractVerticle {
                                 .setUser(System.getProperty("DB_USER", "postgres"))
                                 .setPassword(System.getProperty("DB_PASSWORD", "secret"));
 
-                PoolOptions poolOptions = new PoolOptions()
-                                .setMaxSize(5);
-
+                PoolOptions poolOptions = new PoolOptions().setMaxSize(5);
                 client = PgPool.pool(vertx, connectOptions, poolOptions);
 
                 // Repositories
-                // Repositories
                 BrokerAccountRepository brokerAccountRepository = new BrokerAccountRepository(client);
                 HoldingRepository holdingRepository = new HoldingRepository(client);
-                com.zenith.trade.journal.dal.repository.DividendRepository dividendRepository = new com.zenith.trade.journal.dal.repository.DividendRepository(
-                                client);
+                DividendRepository dividendRepository = new DividendRepository(client);
+                TradeRepository tradeRepository = new TradeRepository(client); // ADD THIS
                 UserRepository userRepository = new UserRepository(client);
 
                 // Services
+                com.zenith.trade.journal.service.RealizedPLService realizedPLService = new com.zenith.trade.journal.service.RealizedPLService();
                 SnapTradeService snapTradeService = new SnapTradeService(vertx, userRepository);
 
                 // Handlers
-                BrokerageHandler brokerageHandler = new BrokerageHandler(snapTradeService, brokerAccountRepository,
-                                holdingRepository, userRepository);
-                DashboardHandler dashboardHandler = new DashboardHandler(snapTradeService, holdingRepository,
-                                userRepository);
-                com.zenith.trade.journal.handler.PerformanceHandler performanceHandler = new com.zenith.trade.journal.handler.PerformanceHandler(
+                BrokerageHandler brokerageHandler = new BrokerageHandler(
+                                snapTradeService, brokerAccountRepository, holdingRepository, userRepository);
+                DashboardHandler dashboardHandler = new DashboardHandler(
+                                snapTradeService, holdingRepository, userRepository);
+                PerformanceHandler performanceHandler = new PerformanceHandler(
                                 snapTradeService, userRepository);
-                com.zenith.trade.journal.handler.DividendHandler dividendHandler = new com.zenith.trade.journal.handler.DividendHandler(
-                                snapTradeService, dividendRepository, userRepository);
+                DividendHandler dividendHandler = new DividendHandler(
+                                snapTradeService, dividendRepository, userRepository, brokerAccountRepository);
+                TradeHandler tradeHandler = new TradeHandler( // ADD THIS
+                                snapTradeService, tradeRepository, userRepository, brokerAccountRepository,
+                                realizedPLService);
 
+                // Router setup
                 Router router = Router.router(vertx);
-                router.route().handler(CorsHandler.create("http://localhost:3000")
+                // CORS setup
+                router.route().handler(CorsHandler.create()
+                                .addOrigin("http://localhost:3000") // Frontend URL
                                 .allowedMethod(HttpMethod.GET)
                                 .allowedMethod(HttpMethod.POST)
+                                .allowedMethod(HttpMethod.PUT)
+                                .allowedMethod(HttpMethod.DELETE)
                                 .allowedMethod(HttpMethod.OPTIONS)
                                 .allowedHeader("Access-Control-Request-Method")
                                 .allowedHeader("Access-Control-Allow-Credentials")
                                 .allowedHeader("Access-Control-Allow-Origin")
                                 .allowedHeader("Access-Control-Allow-Headers")
-                                .allowedHeader("Content-Type"));
+                                .allowedHeader("Content-Type")
+                                .allowedHeader("Authorization")
+                                .allowCredentials(true)); // Important for cookies/auth if needed
+
                 router.route().handler(BodyHandler.create());
 
-                router.post("/api/brokerage/sync").handler(brokerageHandler::syncHoldings);
-                router.get("/api/holdings").handler(brokerageHandler::getHoldings);
-                router.get("/api/dashboard").handler(dashboardHandler::getDashboardSummary);
-
+                // Health check
                 router.get("/health").handler(ctx -> ctx.response().end("OK"));
 
                 // Brokerage Routes
                 router.post("/api/brokerage/register").handler(brokerageHandler::registerUser);
                 router.post("/api/brokerage/connect").handler(brokerageHandler::generateConnectionLink);
+                router.get("/api/brokerage/callback").handler(brokerageHandler::handleOAuthCallback); // OAuth callback
                 router.post("/api/brokerage/sync").handler(brokerageHandler::syncHoldings);
                 router.get("/api/brokerage/accounts").handler(brokerageHandler::getAccounts);
+
+                // User Routes
+                router.get("/api/users/:email/secret").handler(ctx -> {
+                        String email = ctx.pathParam("email");
+                        userRepository.getUserSecret(email)
+                                        .onSuccess(secret -> {
+                                                if (secret != null) {
+                                                        ctx.json(new io.vertx.core.json.JsonObject().put("userSecret",
+                                                                        secret));
+                                                } else {
+                                                        ctx.response().setStatusCode(404).end("User not found");
+                                                }
+                                        })
+                                        .onFailure(err -> ctx.fail(500, err));
+                });
+
+                // Dashboard Routes
+                router.get("/api/holdings").handler(brokerageHandler::getHoldings);
+                router.get("/api/dashboard").handler(dashboardHandler::getDashboardSummary);
 
                 // Performance Routes
                 router.get("/api/performance").handler(performanceHandler::getPerformance);
@@ -96,11 +121,17 @@ public class MainVerticle extends AbstractVerticle {
                 router.get("/api/dividends").handler(dividendHandler::getDividends);
                 router.post("/api/dividends/sync").handler(dividendHandler::syncDividends);
 
+                // Trade Routes (ADD THESE)
+                router.get("/api/trades").handler(tradeHandler::getTrades);
+                router.get("/api/trades/stats").handler(tradeHandler::getTradeStats);
+                router.post("/api/trades/sync").handler(tradeHandler::syncTrades);
+
+                // Start HTTP server
                 vertx.createHttpServer()
                                 .requestHandler(router)
                                 .listen(8080)
                                 .onSuccess(server -> {
-                                        logger.info("Http verticle deploy successful on port 8080");
+                                        logger.info("Http verticle deployed successfully on port 8080");
                                         startPromise.complete();
                                 })
                                 .onFailure(t -> {

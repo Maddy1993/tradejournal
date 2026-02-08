@@ -10,7 +10,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.LocalDate;
-import java.util.UUID;
 
 public class DashboardHandler {
 
@@ -32,59 +31,71 @@ public class DashboardHandler {
             return;
         }
 
-        UUID userUuid = UUID.fromString(userId);
+        userRepo.getUserIdByEmail(userId)
+                .onSuccess(userUuid -> {
+                    if (userUuid == null) {
+                        ctx.fail(404, new RuntimeException("User not found"));
+                        return;
+                    }
 
-        // Fetch holdings from DB for Equity and Unrealized P&L
-        Future<JsonObject> holdingsSummary = holdingRepo.findAllByUserId(userUuid)
-                .map(holdings -> {
-                    double totalEquity = holdings.stream()
-                            .mapToDouble(h -> h.getMarketValue().doubleValue())
-                            .sum();
+                    // Fetch holdings from DB for Equity and Unrealized P&L
+                    Future<JsonObject> holdingsSummary = holdingRepo.findAllByUserId(userUuid)
+                            .map(holdings -> {
+                                double totalEquity = holdings.stream()
+                                        .mapToDouble(h -> h.getMarketValue() != null ? h.getMarketValue().doubleValue()
+                                                : 0.0)
+                                        .sum();
 
-                    double totalCost = holdings.stream()
-                            .mapToDouble(h -> h.getAverageCost().doubleValue() * h.getQuantity().doubleValue())
-                            .sum();
+                                double totalCost = holdings.stream()
+                                        .mapToDouble(h -> (h.getAverageCost() != null ? h.getAverageCost().doubleValue()
+                                                : 0.0)
+                                                * (h.getQuantity() != null ? h.getQuantity().doubleValue() : 0.0))
+                                        .sum();
 
-                    double unrealizedPL = totalEquity - totalCost;
+                                double unrealizedPL = totalEquity - totalCost;
 
-                    return new JsonObject()
-                            .put("totalEquity", totalEquity)
-                            .put("unrealizedPL", unrealizedPL);
-                });
+                                return new JsonObject()
+                                        .put("totalEquity", totalEquity)
+                                        .put("unrealizedPL", unrealizedPL);
+                            });
 
-        // Fetch Realized P&L from SnapTrade (YTD default)
-        Future<JsonObject> performanceFuture = userRepo.getUserSecret(userId)
-                .compose(secret -> {
-                    if (secret == null)
-                        return Future.succeededFuture(new JsonObject());
-                    LocalDate end = LocalDate.now();
-                    LocalDate start = end.minusYears(1); // Default to 1 year for now
-                    return snapTradeService.getPerformanceCustomRange(userId, secret,
-                            start.toString(), end.toString())
-                            .map(perf -> new JsonObject(perf.toJson()));
+                    // Fetch Realized P&L from SnapTrade (YTD default)
+                    Future<JsonObject> performanceFuture = userRepo.getUserSecret(userId)
+                            .compose(secret -> {
+                                if (secret == null)
+                                    return Future.succeededFuture(new JsonObject());
+                                LocalDate end = LocalDate.now();
+                                LocalDate start = end.minusYears(1); // Default to 1 year for now
+                                return snapTradeService.getPerformanceCustomRange(userId, secret,
+                                        start.toString(), end.toString())
+                                        .map(perf -> new JsonObject(perf.toJson()));
+                            })
+                            .recover(t -> {
+                                logger.error("Failed to fetch performance", t);
+                                return Future.succeededFuture(new JsonObject());
+                            });
+
+                    Future.all(holdingsSummary, performanceFuture)
+                            .onSuccess(composite -> {
+                                JsonObject holdingsData = composite.resultAt(0);
+                                JsonObject performanceData = composite.resultAt(1);
+
+                                // Extract realized P&L from performanceData if available
+                                // Structure depends on API, for now putting raw
+
+                                JsonObject response = new JsonObject()
+                                        .mergeIn(holdingsData)
+                                        .put("performance", performanceData);
+
+                                ctx.json(response);
+                            })
+                            .onFailure(t -> {
+                                logger.error("Failed to generate dashboard summary", t);
+                                ctx.fail(500, t);
+                            });
                 })
-                .recover(t -> {
-                    logger.error("Failed to fetch performance", t);
-                    return Future.succeededFuture(new JsonObject());
-                });
-
-        Future.all(holdingsSummary, performanceFuture)
-                .onSuccess(composite -> {
-                    JsonObject holdingsData = composite.resultAt(0);
-                    JsonObject performanceData = composite.resultAt(1);
-
-                    // Extract realized P&L from performanceData if available
-                    // Structure depends on API, for now putting raw
-
-                    JsonObject response = new JsonObject()
-                            .mergeIn(holdingsData)
-                            .put("performance", performanceData);
-
-                    ctx.json(response);
-                })
-                .onFailure(t -> {
-                    logger.error("Failed to generate dashboard summary", t);
-                    ctx.fail(500, t);
+                .onFailure(err -> {
+                    ctx.fail(500, err);
                 });
     }
 }

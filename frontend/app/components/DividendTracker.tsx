@@ -1,34 +1,34 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
+import { useUser } from '../context/UserContext';
 
 interface Dividend {
     id: string;
     symbol: string;
     amount: number;
-    exDate: string;
-    payDate: string;
-    type: string;
+    paymentDate: string; // Changed from payDate to match backend response
 }
 
 const DividendTracker: React.FC = () => {
     const [dividends, setDividends] = useState<Dividend[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-
-    // Hardcoded user ID for now
-    const userId = "123e4567-e89b-12d3-a456-426614174000";
+    const { user } = useUser();
 
     useEffect(() => {
         const fetchDividends = async () => {
-            try {
-                // Placeholder - endpoint not yet implemented
-                // const response = await fetch(`http://localhost:8080/api/dividends?userId=${userId}`);
-                // const data = await response.json();
-                // setDividends(data);
+            if (!user?.email) {
+                setLoading(false);
+                return;
+            }
 
-                // Mock data for now
-                setDividends([]);
+            try {
+                const response = await fetch(`http://localhost:8080/api/dividends?userId=${user.email}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    setDividends(data);
+                }
                 setLoading(false);
             } catch (err) {
                 setError(err instanceof Error ? err.message : 'An error occurred');
@@ -37,7 +37,7 @@ const DividendTracker: React.FC = () => {
         };
 
         fetchDividends();
-    }, [userId]);
+    }, [user?.email]);
 
     const formatCurrency = (value: number) => {
         return new Intl.NumberFormat('en-US', {
@@ -76,9 +76,7 @@ const DividendTracker: React.FC = () => {
                             <tr>
                                 <th scope="col" className="px-6 py-3">Symbol</th>
                                 <th scope="col" className="px-6 py-3">Amount</th>
-                                <th scope="col" className="px-6 py-3">Type</th>
-                                <th scope="col" className="px-6 py-3">Ex-Date</th>
-                                <th scope="col" className="px-6 py-3">Pay Date</th>
+                                <th scope="col" className="px-6 py-3">Payment Date</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -91,13 +89,7 @@ const DividendTracker: React.FC = () => {
                                         {formatCurrency(dividend.amount)}
                                     </td>
                                     <td className="px-6 py-4">
-                                        {dividend.type}
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        {new Date(dividend.exDate).toLocaleDateString()}
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        {new Date(dividend.payDate).toLocaleDateString()}
+                                        {new Date(dividend.paymentDate).toLocaleDateString()}
                                     </td>
                                 </tr>
                             ))}

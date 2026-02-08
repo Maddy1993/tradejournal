@@ -32,13 +32,13 @@ CREATE TABLE IF NOT EXISTS trades (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id UUID REFERENCES broker_accounts(id) ON DELETE CASCADE,
     symbol VARCHAR(20) NOT NULL,
-    trade_date TIMESTAMP WITH TIME ZONE NOT NULL,
+    trade_date DATE NOT NULL,
     action VARCHAR(20) NOT NULL, -- BUY, SELL, BUY_TO_OPEN, SELL_TO_CLOSE, etc.
-    quantity DECIMAL(15, 6) NOT NULL,
-    price DECIMAL(15, 6) NOT NULL,
-    commission DECIMAL(10, 4) DEFAULT 0,
-    fees DECIMAL(10, 4) DEFAULT 0,
-    strategy_group_id UUID, -- For grouping option legs (Iron Condor, etc.)
+    quantity DECIMAL(20, 8) NOT NULL, -- Support fractional shares
+    price DECIMAL(20, 8) NOT NULL,
+    commission DECIMAL(10, 2) DEFAULT 0.00,
+    fees DECIMAL(10, 2) DEFAULT 0.00,
+    strategy_group_id UUID, -- Link to strategy group (for P&L tracking)
     notes TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

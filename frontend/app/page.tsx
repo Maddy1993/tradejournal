@@ -3,8 +3,6 @@
 import { useUser } from './context/UserContext';
 import Header from "./components/Header";
 import Dashboard from "./components/Dashboard";
-import DividendTracker from "./components/DividendTracker";
-import TradeTable from "./components/TradeTable";
 import EmailRegistrationModal from './components/EmailRegistrationModal';
 
 export default function Home() {
@@ -15,21 +13,15 @@ export default function Home() {
       {!email && <EmailRegistrationModal isOpen={!email} onRegister={registerUser} />}
 
       <Header />
-      <main className="flex min-h-screen flex-col items-center p-24 bg-gray-900 text-white">
-        <h1 className="text-4xl font-bold mb-8">Trade Journal</h1>
-
-        <div className="w-full max-w-7xl space-y-8">
-          {/* Dashboard Summary */}
-          <Dashboard />
-
-          {/* Dividend Tracker */}
-          <DividendTracker />
-
-          {/* Holdings Table */}
-          <div className="font-mono text-sm">
-            <h2 className="text-2xl font-semibold mb-4">Holdings</h2>
-            <TradeTable />
+      <main className="min-h-screen bg-gray-50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="mb-8">
+            <h1 className="text-4xl font-bold text-gray-900">Trade Journal</h1>
+            <p className="mt-2 text-gray-600">Track your portfolio, performance, and dividends</p>
           </div>
+
+          {/* Comprehensive Dashboard with Summary Cards, Holdings, and Dividends */}
+          <Dashboard />
         </div>
       </main>
     </>

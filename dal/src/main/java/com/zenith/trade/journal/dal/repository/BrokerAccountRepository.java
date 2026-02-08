@@ -26,12 +26,15 @@ public class BrokerAccountRepository {
     }
 
     public Future<BrokerAccount> save(BrokerAccount account) {
-        String sql = "INSERT INTO broker_accounts (user_id, broker_id, account_number, account_name, is_manual, created_at) "
-                +
-                "VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING id";
+        String sql = "INSERT INTO broker_accounts (user_id, broker_id, account_number, account_name, is_manual) " +
+                "VALUES ($1, $2, $3, $4, $5) " +
+                "ON CONFLICT (user_id, broker_id, account_number) DO UPDATE SET " +
+                "account_name = $4, is_manual = $5 " +
+                "RETURNING id";
         return client.preparedQuery(sql)
-                .execute(Tuple.of(account.getUserId(), account.getBrokerId(), account.getAccountNumber(),
-                        account.getAccountName(), account.getIsManual()))
+                .execute(Tuple.of(account.getUserId(), account.getBrokerId(),
+                        account.getAccountNumber(), account.getAccountName(),
+                        account.getIsManual() != null ? account.getIsManual() : false))
                 .map(rows -> {
                     Row row = rows.iterator().next();
                     account.setId(row.getUUID("id"));

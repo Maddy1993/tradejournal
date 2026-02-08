@@ -6,7 +6,7 @@ import { useUser } from '../context/UserContext';
 import { usePathname } from 'next/navigation';
 
 const Header: React.FC = () => {
-    const { email, connectedBrokers, syncBrokers, isLoading } = useUser();
+    const { email, connectedBrokers, syncBrokers, logout, isLoading } = useUser();
     const pathname = usePathname();
     const [syncing, setSyncing] = React.useState(false);
 
@@ -19,6 +19,12 @@ const Header: React.FC = () => {
             alert('Sync failed. Please try again.');
         } finally {
             setSyncing(false);
+        }
+    };
+
+    const handleLogout = () => {
+        if (confirm('Are you sure you want to log out?')) {
+            logout();
         }
     };
 
@@ -43,8 +49,8 @@ const Header: React.FC = () => {
                         <Link
                             href="/"
                             className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive('/')
-                                    ? 'text-white bg-gray-700'
-                                    : 'text-gray-300 hover:text-white hover:bg-gray-700'
+                                ? 'text-white bg-gray-700'
+                                : 'text-gray-300 hover:text-white hover:bg-gray-700'
                                 }`}
                         >
                             Dashboard
@@ -52,8 +58,8 @@ const Header: React.FC = () => {
                         <Link
                             href="/settings"
                             className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive('/settings')
-                                    ? 'text-white bg-gray-700'
-                                    : 'text-gray-300 hover:text-white hover:bg-gray-700'
+                                ? 'text-white bg-gray-700'
+                                : 'text-gray-300 hover:text-white hover:bg-gray-700'
                                 }`}
                         >
                             Settings
@@ -96,10 +102,21 @@ const Header: React.FC = () => {
                             </button>
                         )}
 
-                        {/* User email (if logged in) */}
+                        {/* User email and logout button */}
                         {email && (
-                            <div className="hidden lg:block text-sm text-gray-400">
-                                {email}
+                            <div className="flex items-center space-x-3">
+                                <div className="hidden lg:block text-sm text-gray-400">
+                                    {email}
+                                </div>
+                                <button
+                                    onClick={handleLogout}
+                                    className="px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-gray-700 rounded-md transition-colors"
+                                    title="Logout"
+                                >
+                                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                                    </svg>
+                                </button>
                             </div>
                         )}
                     </div>

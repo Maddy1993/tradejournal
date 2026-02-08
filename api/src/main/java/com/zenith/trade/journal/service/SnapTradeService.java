@@ -82,18 +82,32 @@ public class SnapTradeService {
     public Future<String> generateConnectionLink(String userId, String userSecret) {
         return Future.future(promise -> {
             try {
+                // Set callback URL for after broker connection
+                String callbackUrl = "http://localhost:8080/api/brokerage/callback?userId=" + userId;
+
                 Object response = snapTrade.authentication
                         .loginSnapTradeUser(userId, userSecret)
+                        .customRedirect(callbackUrl) // Where to redirect after connection
+                        .immediateRedirect(true) // Redirect immediately after success
                         .execute();
 
-                JsonObject json = new JsonObject(response.toString());
-                String redirectUri = json.getString("redirectURI");
-                if (redirectUri != null) {
-                    promise.complete(redirectUri);
+                // SnapTrade SDK returns a Map object, cast it properly
+                if (response instanceof java.util.Map) {
+                    @SuppressWarnings("unchecked")
+                    java.util.Map<String, Object> map = (java.util.Map<String, Object>) response;
+                    String redirectUri = (String) map.get("redirectURI");
+
+                    if (redirectUri != null) {
+                        logger.info("Generated connection link with callback URL: {}", callbackUrl);
+                        promise.complete(redirectUri);
+                    } else {
+                        promise.fail("No redirectURI in response. Available keys: " + map.keySet());
+                    }
                 } else {
-                    promise.fail("No redirectURI in response");
+                    promise.fail("Unexpected response type: " + response.getClass().getName());
                 }
             } catch (Exception e) {
+                logger.error("Failed to generate connection link", e);
                 promise.fail(e);
             }
         });
@@ -170,6 +184,103 @@ public class SnapTradeService {
                         .execute();
 
                 promise.complete(activities);
+            } catch (Exception e) {
+                promise.fail(e);
+            }
+        });
+    }
+
+    /**
+     * List all users registered with SnapTrade for this consumer.
+     * This is useful for syncing users between our database and SnapTrade.
+     */
+    public Future<JsonArray> listAllSnapTradeUsers() {
+        return Future.future(promise -> {
+            try {
+                List<String> userIds = snapTrade.authentication.listSnapTradeUsers().execute();
+                JsonArray result = new JsonArray();
+                for (String userId : userIds) {
+                    result.add(userId);
+                }
+                logger.info("Found {} users in SnapTrade", userIds.size());
+                promise.complete(result);
+            } catch (Exception e) {
+                logger.error("Failed to list SnapTrade users", e);
+                promise.fail(e);
+            }
+        });
+    }
+
+    /**
+     * Check if a user exists in SnapTrade by listing all users.
+     * If the user doesn't exist, register them and update the database.
+     */
+    public Future<String> ensureUserExistsInSnapTrade(String userId) {
+        return listAllSnapTradeUsers()
+                .compose(snapTradeUsers -> {
+                    // Check if user exists in SnapTrade
+                    boolean userExists = false;
+                    for (int i = 0; i < snapTradeUsers.size(); i++) {
+                        if (userId.equals(snapTradeUsers.getString(i))) {
+                            userExists = true;
+                            break;
+                        }
+                    }
+
+                    if (userExists) {
+                        logger.info("User {} exists in SnapTrade, retrieving secret from database", userId);
+                        // User exists, get their secret from database
+                        return userRepository.getUserSecret(userId);
+                    } else {
+                        logger.warn("User {} does NOT exist in SnapTrade, registering now", userId);
+                        // User doesn't exist in SnapTrade, register them
+                        return registerUser(userId)
+                                .compose(newSecret -> {
+                                    // Update the database with the new secret
+                                    return userRepository.saveUserSecret(userId, newSecret)
+                                            .map(newSecret);
+                                });
+                    }
+                });
+    }
+
+    public Future<List<com.konfigthis.client.model.UniversalActivity>> getTradeActivities(
+            String userId, String userSecret, String startDate, String endDate) {
+        return Future.future(promise -> {
+            try {
+                // Parse dates or use defaults (last year if not provided)
+                LocalDate start = startDate != null ? LocalDate.parse(startDate)
+                        : LocalDate.now().minusYears(1);
+                LocalDate end = endDate != null ? LocalDate.parse(endDate)
+                        : LocalDate.now();
+
+                // Fetch all activities (will filter for trades in handler)
+                // Note: SnapTrade doesn't have a specific "TRADE" type filter
+                // We fetch all activities and filter for BUY/SELL types
+                List<com.konfigthis.client.model.UniversalActivity> activities = snapTrade.transactionsAndReporting
+                        .getActivities(userId, userSecret)
+                        .startDate(start)
+                        .endDate(end)
+                        .execute();
+
+                // Filter for trade-related activities only
+                List<com.konfigthis.client.model.UniversalActivity> trades = activities.stream()
+                        .filter(a -> {
+                            String type = a.getType();
+                            return type != null && (type.equalsIgnoreCase("BUY") ||
+                                    type.equalsIgnoreCase("SELL") ||
+                                    type.equalsIgnoreCase("BTO") ||
+                                    type.equalsIgnoreCase("STC") ||
+                                    type.equalsIgnoreCase("STO") ||
+                                    type.equalsIgnoreCase("BTC") ||
+                                    type.equalsIgnoreCase("BUY_TO_OPEN") ||
+                                    type.equalsIgnoreCase("SELL_TO_CLOSE") ||
+                                    type.equalsIgnoreCase("SELL_TO_OPEN") ||
+                                    type.equalsIgnoreCase("BUY_TO_CLOSE"));
+                        })
+                        .collect(java.util.stream.Collectors.toList());
+
+                promise.complete(trades);
             } catch (Exception e) {
                 promise.fail(e);
             }

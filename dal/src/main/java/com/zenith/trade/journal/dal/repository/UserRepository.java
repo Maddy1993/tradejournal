@@ -3,6 +3,7 @@ package com.zenith.trade.journal.dal.repository;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.SqlClient;
 import io.vertx.sqlclient.Tuple;
+import java.util.UUID;
 
 public class UserRepository {
 
@@ -22,15 +23,36 @@ public class UserRepository {
                 .mapEmpty();
     }
 
-    public Future<String> getUserSecret(String userId) {
-        // Look up by email since userId is email
+    public Future<String> getUserSecret(String email) {
         return client.preparedQuery("SELECT user_secret FROM users WHERE email = $1")
-                .execute(Tuple.of(userId))
+                .execute(Tuple.of(email))
+                .map(rows -> {
+                    if (rows.size() == 0) {
+                        return null;
+                    }
+                    return rows.iterator().next().getString("user_secret");
+                });
+    }
+
+    public Future<UUID> getUserIdByEmail(String email) {
+        return client.preparedQuery("SELECT id FROM users WHERE email = $1")
+                .execute(Tuple.of(email))
+                .map(rows -> {
+                    if (rows.size() == 0) {
+                        throw new RuntimeException("User not found: " + email);
+                    }
+                    return rows.iterator().next().getUUID("id");
+                });
+    }
+
+    public Future<java.util.UUID> getUserByEmail(String email) {
+        return client.preparedQuery("SELECT id FROM users WHERE email = $1")
+                .execute(Tuple.of(email))
                 .map(rows -> {
                     if (rows.size() > 0) {
-                        return rows.iterator().next().getString("user_secret");
+                        return rows.iterator().next().getUUID("id");
                     } else {
-                        return null;
+                        throw new RuntimeException("User not found: " + email);
                     }
                 });
     }

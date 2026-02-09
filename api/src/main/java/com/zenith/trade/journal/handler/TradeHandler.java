@@ -46,7 +46,7 @@ public class TradeHandler {
         String endDateStr = ctx.request().getParam("endDate");
         String limitStr = ctx.request().getParam("limit");
 
-        if (userId == null) {
+        if (userId == null || userId.trim().isEmpty()) {
             ctx.fail(400, new IllegalArgumentException("userId is required"));
             return;
         }
@@ -96,7 +96,7 @@ public class TradeHandler {
     public void getTradeStats(RoutingContext ctx) {
         String userId = ctx.request().getParam("userId");
 
-        if (userId == null) {
+        if (userId == null || userId.trim().isEmpty()) {
             ctx.fail(400, new IllegalArgumentException("userId is required"));
             return;
         }
@@ -139,6 +139,7 @@ public class TradeHandler {
     public void syncTrades(RoutingContext ctx) {
         JsonObject body = ctx.body().asJsonObject();
         String userId = body.getString("userId");
+        logger.info("Starting trades sync for user {}", userId);
         String startDate = body.getString("startDate");
         String endDate = body.getString("endDate");
 
@@ -204,6 +205,18 @@ public class TradeHandler {
                                             .fees(java.math.BigDecimal.ZERO)
                                             .notes("Imported from SnapTrade")
                                             .build();
+
+                                    // Generate hash for deduplication
+                                    String tradeHash = generateTradeHash(
+                                            brokerAccount.getId(),
+                                            trade.getSymbol(),
+                                            trade.getTradeDate(),
+                                            trade.getAction(),
+                                            trade.getQuantity(),
+                                            trade.getPrice(),
+                                            activity.getTradeDate() // Include full timestamp
+                                    );
+                                    trade.setTradeHash(tradeHash);
 
                                     return tradeRepo.save(trade);
                                 });
@@ -307,6 +320,50 @@ public class TradeHandler {
                 return "BUY_TO_CLOSE";
             default:
                 return activityType;
+        }
+    }
+
+    /**
+     * Generate a unique hash for a trade to prevent duplicates
+     * Uses SHA-256 hash of trade properties including timestamp
+     */
+    private String generateTradeHash(
+            java.util.UUID accountId,
+            String symbol,
+            java.time.LocalDate tradeDate,
+            String action,
+            java.math.BigDecimal quantity,
+            java.math.BigDecimal price,
+            java.time.OffsetDateTime timestamp) {
+        try {
+            // Combine all trade properties into a single string
+            String tradeData = String.format("%s|%s|%s|%s|%s|%s|%s",
+                    accountId.toString(),
+                    symbol,
+                    tradeDate.toString(),
+                    action,
+                    quantity.toPlainString(),
+                    price.toPlainString(),
+                    timestamp.toString());
+
+            // Generate SHA-256 hash
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hashBytes = digest.digest(tradeData.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+            // Convert to hex string
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hashBytes) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1)
+                    hexString.append('0');
+                hexString.append(hex);
+            }
+            return hexString.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            logger.error("Failed to generate trade hash", e);
+            // Fallback to simple concatenation if SHA-256 is not available
+            return String.format("%s_%s_%s_%s_%s_%s_%s",
+                    accountId, symbol, tradeDate, action, quantity, price, timestamp);
         }
     }
 }

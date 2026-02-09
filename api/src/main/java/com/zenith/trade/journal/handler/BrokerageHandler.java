@@ -157,6 +157,7 @@ public class BrokerageHandler {
 
     public void syncHoldings(RoutingContext ctx) {
         String userId = ctx.body().asJsonObject().getString("userId");
+        logger.info("Starting holdings sync for user {}", userId);
 
         // Step 0: Get the user's UUID from their email
         userRepo.getUserIdByEmail(userId)

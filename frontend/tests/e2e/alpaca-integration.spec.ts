@@ -47,21 +47,26 @@ test('Alpaca Paper Account Integration', async ({ page, request }) => {
     // 6. Go back to dashboard/Trade History
     await page.goto('http://localhost:3000/trades'); // Assuming URL structure or navigate via menu
 
-    // Wait for trade history table
-    await expect(page.getByRole('table')).toBeVisible();
+    // Wait for trade history table or empty state
+    // If table is not visible, we might need to sync first
+    const table = page.getByRole('table');
+    const emptyState = page.getByText(/No Trades Found/i);
+
+    await expect(table.or(emptyState)).toBeVisible();
+
+    if (await emptyState.isVisible()) {
+        const syncButton = page.getByRole('button', { name: /Sync|Refresh/i });
+        if (await syncButton.isVisible()) {
+            await syncButton.click();
+            // Wait for sync to complete (table should appear)
+            await expect(table).toBeVisible({ timeout: 10000 });
+        }
+    } else {
+        await expect(table).toBeVisible();
+    }
 
     // Check for populated rows
     const rows = page.locator('tbody tr');
-    // We expect at least one trade row if sync worked
-    // If sync needs to be triggered manually, we might need to find the Sync button first.
-    // The user request said "Locate the 'Sync Trades' button... and click it".
-    // I'll try to find it on the page.
-    const syncButton = page.getByRole('button', { name: /Sync|Refresh/i });
-    if (await syncButton.isVisible()) {
-        await syncButton.click();
-        // Wait for sync to complete (loading state?)
-        await page.waitForTimeout(5000);
-    }
 
     // Verify rows exist
     await expect(rows).not.toHaveCount(0);

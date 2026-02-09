@@ -40,7 +40,9 @@ const TradeHistory: React.FC = () => {
     const [trades, setTrades] = useState<Trade[]>([]);
     const [stats, setStats] = useState<TradeStats | null>(null);
     const [loading, setLoading] = useState(true);
+    const [syncing, setSyncing] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
     // Filter state
     const [symbolFilter, setSymbolFilter] = useState('');
@@ -51,9 +53,12 @@ const TradeHistory: React.FC = () => {
 
     // ==================== DATA FETCHING ====================
     useEffect(() => {
+        // Don't fetch if user hasn't loaded yet
+        if (!userId) return;
+
         fetchTrades();
         fetchStats();
-    }, [symbolFilter, actionFilter, startDate, endDate, limit]);
+    }, [userId, symbolFilter, actionFilter, startDate, endDate, limit]);
 
     const fetchTrades = async () => {
         setLoading(true);
@@ -97,7 +102,8 @@ const TradeHistory: React.FC = () => {
     };
 
     const handleSyncTrades = async () => {
-        setLoading(true);
+        setSyncing(true);
+        setToast(null);
         try {
             const response = await fetch('http://localhost:8080/api/trades/sync', {
                 method: 'POST',
@@ -111,17 +117,28 @@ const TradeHistory: React.FC = () => {
 
             if (response.ok) {
                 const result = await response.json();
-                alert(`Successfully synced ${result.trades_synced} trades!`);
+                setToast({
+                    message: `Successfully synced ${result.trades_synced || 0} trades!`,
+                    type: 'success'
+                });
                 fetchTrades();
                 fetchStats();
             } else {
                 const error = await response.json();
-                alert(`Failed to sync: ${error.message || 'Unknown error'}`);
+                setToast({
+                    message: `Failed to sync: ${error.message || 'Unknown error'}`,
+                    type: 'error'
+                });
             }
         } catch (err) {
-            alert(`Error syncing trades: ${err}`);
+            setToast({
+                message: `Error syncing trades: ${err}`,
+                type: 'error'
+            });
         } finally {
-            setLoading(false);
+            setSyncing(false);
+            // Auto-hide toast after 5 seconds
+            setTimeout(() => setToast(null), 5000);
         }
     };
 
@@ -194,19 +211,40 @@ const TradeHistory: React.FC = () => {
     // ==================== MAIN RENDER ====================
     return (
         <div className="min-h-screen bg-gray-50 p-6 space-y-6">
+            {/* Toast Notification */}
+            {toast && (
+                <div className={`fixed top-4 right-4 z-50 px-6 py-4 rounded-lg shadow-lg flex items-center gap-3 ${toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'
+                    } text-white animate-slide-in`}>
+                    {toast.type === 'success' ? (
+                        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                    ) : (
+                        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    )}
+                    <span className="font-medium">{toast.message}</span>
+                    <button onClick={() => setToast(null)} className="ml-4">
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+            )}
             {/* ==================== HEADER & STATS ==================== */}
             <div className="bg-white rounded-xl shadow-lg p-6">
                 <div className="flex items-center justify-between mb-6">
                     <h1 className="text-3xl font-bold text-gray-800">Trade History</h1>
                     <button
                         onClick={handleSyncTrades}
-                        disabled={loading}
+                        disabled={syncing}
                         className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                     >
-                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg className={`w-5 h-5 ${syncing ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                         </svg>
-                        Sync Trades
+                        {syncing ? 'Syncing...' : 'Sync Trades'}
                     </button>
                 </div>
 

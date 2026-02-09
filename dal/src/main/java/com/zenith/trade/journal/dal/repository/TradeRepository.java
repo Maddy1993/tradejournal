@@ -104,9 +104,12 @@ public class TradeRepository {
      * Save a new trade or update existing
      */
     public Future<Trade> save(Trade trade) {
-        String sql = "INSERT INTO trades (account_id, symbol, trade_date, action, quantity, price, commission, fees, strategy_group_id, notes, realized_pl) "
+        String sql = "INSERT INTO trades (account_id, symbol, trade_date, action, quantity, price, commission, fees, strategy_group_id, notes, realized_pl, trade_hash) "
                 +
-                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) " +
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) " +
+                "ON CONFLICT (trade_hash) DO UPDATE SET " +
+                "realized_pl = EXCLUDED.realized_pl, " +
+                "notes = EXCLUDED.notes " +
                 "RETURNING id, created_at";
 
         return client.preparedQuery(sql)
@@ -120,10 +123,9 @@ public class TradeRepository {
                         trade.getCommission(),
                         trade.getFees(),
                         trade.getStrategyGroupId(),
-                        trade.getFees(),
-                        trade.getStrategyGroupId(),
                         trade.getNotes(),
-                        trade.getRealizedPl()))
+                        trade.getRealizedPl(),
+                        trade.getTradeHash()))
                 .map(rows -> {
                     Row row = rows.iterator().next();
                     trade.setId(row.getUUID("id"));

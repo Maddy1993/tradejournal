@@ -128,13 +128,30 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
         setIsLoading(true);
         try {
-            const response = await fetch('http://localhost:8080/api/brokerage/sync', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId }), // Only send userId (email)
-            });
+            // Sync in parallel: Holdings, Trades, Dividends
+            const [holdingsRes, tradesRes, dividendsRes] = await Promise.all([
+                fetch('http://localhost:8080/api/brokerage/sync', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId }),
+                }),
+                fetch('http://localhost:8080/api/trades/sync', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId }),
+                }),
+                fetch('http://localhost:8080/api/dividends/sync', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId }),
+                })
+            ]);
 
-            if (!response.ok) throw new Error('Sync failed');
+            if (!holdingsRes.ok && !tradesRes.ok && !dividendsRes.ok) {
+                throw new Error('All sync operations failed');
+            } else if (!holdingsRes.ok || !tradesRes.ok || !dividendsRes.ok) {
+                console.warn('Some sync operations failed');
+            }
 
             // Refresh broker list after sync
             if (userSecret) {

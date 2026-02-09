@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS trades (
     commission DECIMAL(10, 2) DEFAULT 0.00,
     fees DECIMAL(10, 2) DEFAULT 0.00,
     strategy_group_id UUID, -- Link to strategy group (for P&L tracking)
+    realized_pl DECIMAL(20, 8), -- Realized P&L for closed trades
     notes TEXT,
+    trade_hash VARCHAR(64) UNIQUE, -- Hash of trade properties for deduplication
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 

@@ -26,4 +26,5 @@ public class Trade {
     private String notes;
     private OffsetDateTime createdAt;
     private BigDecimal realizedPl;
+    private String tradeHash; // Hash for deduplication
 }

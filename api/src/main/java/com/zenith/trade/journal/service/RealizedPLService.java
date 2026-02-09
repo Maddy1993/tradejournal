@@ -20,8 +20,11 @@ public class RealizedPLService {
      * Calculate realized P&L for a list of trades using FIFO method.
      */
     public List<Trade> calculateRealizedPL(List<Trade> trades) {
-        // Sort trades by date ascending
-        trades.sort(Comparator.comparing(Trade::getTradeDate).thenComparing(Trade::getCreatedAt));
+        // Sort trades by date ascending, then BUY before SELL within same date
+        // so that long positions are opened before sells attempt to close them
+        trades.sort(Comparator.comparing(Trade::getTradeDate)
+                .thenComparing(t -> t.getAction().toUpperCase().contains("BUY") ? 0 : 1)
+                .thenComparing(Trade::getCreatedAt));
 
         // Map of symbol -> Queue of open positions
         Map<String, Deque<TradeBatch>> openPositions = new HashMap<>();
@@ -34,7 +37,7 @@ public class RealizedPLService {
 
             String symbol = trade.getSymbol();
             String action = trade.getAction().toUpperCase();
-            BigDecimal quantity = trade.getQuantity();
+            BigDecimal quantity = trade.getQuantity().abs();
             BigDecimal price = trade.getPrice();
 
             boolean isBuy = action.contains("BUY");
@@ -79,7 +82,7 @@ public class RealizedPLService {
     }
 
     private void processClosing(Trade trade, Deque<TradeBatch> batches, int direction) {
-        BigDecimal remainingQtyToClose = trade.getQuantity();
+        BigDecimal remainingQtyToClose = trade.getQuantity().abs();
         BigDecimal realizedPl = BigDecimal.ZERO;
         BigDecimal closingPrice = trade.getPrice();
 

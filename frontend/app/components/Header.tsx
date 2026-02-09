@@ -6,21 +6,8 @@ import { useUser } from '../context/UserContext';
 import { usePathname } from 'next/navigation';
 
 const Header: React.FC = () => {
-    const { email, connectedBrokers, syncBrokers, logout, isLoading } = useUser();
+    const { email, connectedBrokers, logout, isLoading } = useUser();
     const pathname = usePathname();
-    const [syncing, setSyncing] = React.useState(false);
-
-    const handleSync = async () => {
-        setSyncing(true);
-        try {
-            await syncBrokers();
-        } catch (error) {
-            console.error('Sync failed:', error);
-            alert('Sync failed. Please try again.');
-        } finally {
-            setSyncing(false);
-        }
-    };
 
     const handleLogout = () => {
         if (confirm('Are you sure you want to log out?')) {
@@ -91,25 +78,6 @@ const Header: React.FC = () => {
                                 </span>
                             )}
                         </div>
-
-                        {/* Sync button */}
-                        {connectedBrokers.length > 0 && (
-                            <button
-                                onClick={handleSync}
-                                disabled={syncing || isLoading}
-                                className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                            >
-                                <svg
-                                    className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`}
-                                    fill="none"
-                                    viewBox="0 0 24 24"
-                                    stroke="currentColor"
-                                >
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                </svg>
-                                <span className="hidden sm:inline">{syncing ? 'Syncing...' : 'Sync'}</span>
-                            </button>
-                        )}
 
                         {/* User email and logout button */}
                         {email && (

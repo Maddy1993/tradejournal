@@ -75,7 +75,8 @@ public class TradeHandler {
                                     .put("totalCost", calculateTotalCost(t))
                                     .put("strategyGroupId",
                                             t.getStrategyGroupId() != null ? t.getStrategyGroupId().toString() : null)
-                                    .put("notes", t.getNotes());
+                                    .put("notes", t.getNotes())
+                                    .put("realizedPl", t.getRealizedPl());
                             result.add(tradeJson);
                         });
                         ctx.json(result);
@@ -282,7 +283,7 @@ public class TradeHandler {
     /**
      * Calculate total cost of a trade (including commission and fees)
      */
-    private java.math.BigDecimal calculateTotalCost(Trade trade) {
+    java.math.BigDecimal calculateTotalCost(Trade trade) {
         java.math.BigDecimal baseAmount = trade.getPrice().multiply(trade.getQuantity());
         java.math.BigDecimal totalFees = trade.getCommission().add(trade.getFees());
 
@@ -298,7 +299,7 @@ public class TradeHandler {
     /**
      * Map SnapTrade activity type to trade action
      */
-    private String determineAction(String activityType) {
+    String determineAction(String activityType) {
         if (activityType == null)
             return "UNKNOWN";
 
@@ -327,7 +328,7 @@ public class TradeHandler {
      * Generate a unique hash for a trade to prevent duplicates
      * Uses SHA-256 hash of trade properties including timestamp
      */
-    private String generateTradeHash(
+    String generateTradeHash(
             java.util.UUID accountId,
             String symbol,
             java.time.LocalDate tradeDate,

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useUser } from '../context/UserContext';
 
 // ==================== INTERFACES ====================
@@ -30,6 +30,109 @@ interface TradeStats {
     netAmount: number;
 }
 
+interface TradePair {
+    entryTrade: Trade;
+    exitTrade: Trade | null;
+    quantity: number;
+    entryPrice: number;
+    exitPrice: number | null;
+    realizedPl: number | null;
+    status: 'closed' | 'open';
+}
+
+interface SymbolGroup {
+    symbol: string;
+    pairs: TradePair[];
+    totalQuantity: number;
+    netPl: number;
+    openQuantity: number;
+}
+
+// ==================== GROUPING UTILITY ====================
+function groupTradesIntoPairs(trades: Trade[]): SymbolGroup[] {
+    const bySymbol = new Map<string, Trade[]>();
+    trades.forEach(t => {
+        const list = bySymbol.get(t.symbol) || [];
+        list.push(t);
+        bySymbol.set(t.symbol, list);
+    });
+
+    const groups: SymbolGroup[] = [];
+
+    bySymbol.forEach((symbolTrades, symbol) => {
+        // Sort chronologically
+        const sorted = [...symbolTrades].sort(
+            (a, b) => new Date(a.tradeDate).getTime() - new Date(b.tradeDate).getTime()
+        );
+
+        const buyQueue: { trade: Trade; remainingQty: number }[] = [];
+        const pairs: TradePair[] = [];
+
+        sorted.forEach(trade => {
+            const isBuy = trade.action.includes('BUY');
+            const isSell = trade.action.includes('SELL');
+
+            if (isBuy) {
+                buyQueue.push({ trade, remainingQty: trade.quantity });
+            } else if (isSell) {
+                let sellQtyLeft = trade.quantity;
+                while (sellQtyLeft > 0 && buyQueue.length > 0) {
+                    const front = buyQueue[0];
+                    const matchQty = Math.min(sellQtyLeft, front.remainingQty);
+                    const pl = matchQty * (trade.price - front.trade.price);
+
+                    pairs.push({
+                        entryTrade: front.trade,
+                        exitTrade: trade,
+                        quantity: matchQty,
+                        entryPrice: front.trade.price,
+                        exitPrice: trade.price,
+                        realizedPl: pl,
+                        status: 'closed',
+                    });
+
+                    front.remainingQty -= matchQty;
+                    sellQtyLeft -= matchQty;
+
+                    if (front.remainingQty <= 0) {
+                        buyQueue.shift();
+                    }
+                }
+            }
+        });
+
+        // Remaining open buys
+        buyQueue.forEach(entry => {
+            if (entry.remainingQty > 0) {
+                pairs.push({
+                    entryTrade: entry.trade,
+                    exitTrade: null,
+                    quantity: entry.remainingQty,
+                    entryPrice: entry.trade.price,
+                    exitPrice: null,
+                    realizedPl: null,
+                    status: 'open',
+                });
+            }
+        });
+
+        const netPl = pairs.reduce((sum, p) => sum + (p.realizedPl || 0), 0);
+        const totalQuantity = pairs.reduce((sum, p) => sum + p.quantity, 0);
+        const openQuantity = pairs.filter(p => p.status === 'open').reduce((sum, p) => sum + p.quantity, 0);
+
+        groups.push({ symbol, pairs, totalQuantity, netPl, openQuantity });
+    });
+
+    // Sort: symbols with open positions first, then by net P&L
+    groups.sort((a, b) => {
+        if (a.openQuantity > 0 && b.openQuantity <= 0) return -1;
+        if (a.openQuantity <= 0 && b.openQuantity > 0) return 1;
+        return b.netPl - a.netPl;
+    });
+
+    return groups;
+}
+
 // ==================== COMPONENT ====================
 const TradeHistory: React.FC = () => {
     // Get user email from context
@@ -43,6 +146,8 @@ const TradeHistory: React.FC = () => {
     const [syncing, setSyncing] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+    const [viewMode, setViewMode] = useState<'flat' | 'grouped'>('flat');
+    const [expandedSymbols, setExpandedSymbols] = useState<Set<string>>(new Set());
 
     // Filter state
     const [symbolFilter, setSymbolFilter] = useState('');
@@ -50,6 +155,18 @@ const TradeHistory: React.FC = () => {
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
     const [limit, setLimit] = useState(100);
+
+    // Grouped data
+    const symbolGroups = useMemo(() => groupTradesIntoPairs(trades), [trades]);
+
+    const toggleExpanded = (symbol: string) => {
+        setExpandedSymbols(prev => {
+            const next = new Set(prev);
+            if (next.has(symbol)) next.delete(symbol);
+            else next.add(symbol);
+            return next;
+        });
+    };
 
     // ==================== DATA FETCHING ====================
     useEffect(() => {
@@ -168,6 +285,14 @@ const TradeHistory: React.FC = () => {
             day: 'numeric',
             hour: '2-digit',
             minute: '2-digit'
+        });
+    };
+
+    const formatDateShort = (dateString: string): string => {
+        return new Date(dateString).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
         });
     };
 
@@ -356,64 +481,179 @@ const TradeHistory: React.FC = () => {
                 </div>
             </div>
 
-            {/* ==================== TRADES TABLE ==================== */}
+            {/* ==================== VIEW TOGGLE & TRADES TABLE ==================== */}
             <div className="bg-white rounded-xl shadow-lg overflow-hidden">
-                <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+                <div className="px-6 py-4 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
                     <h2 className="text-xl font-semibold text-gray-800">Trades</h2>
+                    <div className="flex items-center bg-gray-200 rounded-lg p-1">
+                        <button
+                            onClick={() => setViewMode('flat')}
+                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'flat' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                        >
+                            All Trades
+                        </button>
+                        <button
+                            onClick={() => setViewMode('grouped')}
+                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'grouped' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                        >
+                            Grouped Pairs
+                        </button>
+                    </div>
                 </div>
                 <div className="overflow-x-auto">
                     {trades.length > 0 ? (
-                        <table className="w-full">
-                            <thead className="bg-gray-50">
-                                <tr>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Symbol</th>
-                                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
-                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
-                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
-                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Total Cost</th>
-                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Realized P&L</th>
-                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Fees</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Notes</th>
-                                </tr>
-                            </thead>
-                            <tbody className="bg-white divide-y divide-gray-200">
-                                {trades.map((trade) => (
-                                    <tr key={trade.id} className="hover:bg-gray-50 transition-colors duration-150">
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                                            {formatDate(trade.tradeDate)}
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap">
-                                            <div className="text-sm font-bold text-gray-900">{trade.symbol}</div>
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-center">
-                                            <span className={`px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getActionColor(trade.action)}`}>
-                                                {trade.action}
-                                            </span>
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-700">
-                                            {trade.quantity.toFixed(4)}
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right font-medium text-gray-900">
-                                            {formatCurrency(trade.price)}
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right font-semibold text-gray-900">
-                                            {formatCurrency(trade.totalCost)}
-                                        </td>
-                                        <td className={`px-6 py-4 whitespace-nowrap text-sm text-right font-semibold ${(trade.realizedPl || 0) > 0 ? 'text-green-600' : (trade.realizedPl || 0) < 0 ? 'text-red-600' : 'text-gray-900'
-                                            }`}>
-                                            {formatCurrency(trade.realizedPl)}
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-600">
-                                            {formatCurrency(trade.commission + trade.fees)}
-                                        </td>
-                                        <td className="px-6 py-4 text-sm text-gray-500 max-w-xs truncate">
-                                            {trade.notes || '-'}
-                                        </td>
+                        viewMode === 'flat' ? (
+                            /* ==================== FLAT VIEW ==================== */
+                            <table className="w-full">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Symbol</th>
+                                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
+                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
+                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Total Cost</th>
+                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Realized P&L</th>
+                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Fees</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Notes</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {trades.map((trade) => (
+                                        <tr key={trade.id} className="hover:bg-gray-50 transition-colors duration-150">
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                                                {formatDate(trade.tradeDate)}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                <div className="text-sm font-bold text-gray-900">{trade.symbol}</div>
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-center">
+                                                <span className={`px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getActionColor(trade.action)}`}>
+                                                    {trade.action}
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-700">
+                                                {trade.quantity.toFixed(4)}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-right font-medium text-gray-900">
+                                                {formatCurrency(trade.price)}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-right font-semibold text-gray-900">
+                                                {formatCurrency(trade.totalCost)}
+                                            </td>
+                                            <td className={`px-6 py-4 whitespace-nowrap text-sm text-right font-semibold ${(trade.realizedPl || 0) > 0 ? 'text-green-600' : (trade.realizedPl || 0) < 0 ? 'text-red-600' : 'text-gray-900'
+                                                }`}>
+                                                {formatCurrency(trade.realizedPl)}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-600">
+                                                {formatCurrency(trade.commission + trade.fees)}
+                                            </td>
+                                            <td className="px-6 py-4 text-sm text-gray-500 max-w-xs truncate">
+                                                {trade.notes || '-'}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        ) : (
+                            /* ==================== GROUPED VIEW ==================== */
+                            <table className="w-full">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-8"></th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Symbol</th>
+                                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Pairs</th>
+                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Total Qty</th>
+                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Open Qty</th>
+                                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Net P&L</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {symbolGroups.map((group) => (
+                                        <React.Fragment key={group.symbol}>
+                                            {/* Summary row */}
+                                            <tr
+                                                className="hover:bg-gray-50 cursor-pointer transition-colors duration-150"
+                                                onClick={() => toggleExpanded(group.symbol)}
+                                            >
+                                                <td className="px-6 py-4 text-gray-500">
+                                                    <svg className={`w-4 h-4 transition-transform ${expandedSymbols.has(group.symbol) ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                                    </svg>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <div className="text-sm font-bold text-gray-900">{group.symbol}</div>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-center text-sm text-gray-700">
+                                                    {group.pairs.length}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-700">
+                                                    {group.totalQuantity.toFixed(4)}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-700">
+                                                    {group.openQuantity > 0 ? (
+                                                        <span className="text-blue-600 font-medium">{group.openQuantity.toFixed(4)}</span>
+                                                    ) : (
+                                                        <span className="text-gray-400">-</span>
+                                                    )}
+                                                </td>
+                                                <td className={`px-6 py-4 whitespace-nowrap text-sm text-right font-semibold ${group.netPl > 0 ? 'text-green-600' : group.netPl < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                                                    {formatCurrency(group.netPl)}
+                                                </td>
+                                            </tr>
+                                            {/* Expanded pairs table */}
+                                            {expandedSymbols.has(group.symbol) && (
+                                                <tr className="bg-gray-50">
+                                                    <td className="px-6 py-3"></td>
+                                                    <td className="px-6 py-3" colSpan={5}>
+                                                        <table className="w-full text-xs">
+                                                            <thead>
+                                                                <tr className="text-gray-500 border-b border-gray-200">
+                                                                    <th className="py-2 text-center font-medium">Status</th>
+                                                                    <th className="py-2 text-right font-medium">Qty</th>
+                                                                    <th className="py-2 text-left font-medium pl-4">Entry</th>
+                                                                    <th className="py-2 text-left font-medium pl-4">Exit</th>
+                                                                    <th className="py-2 text-right font-medium">Realized P&L</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                {group.pairs.map((pair, idx) => (
+                                                                    <tr key={`${group.symbol}-pair-${idx}`} className="border-b border-gray-100">
+                                                                        <td className="py-2 text-center">
+                                                                            <span className={`px-2 py-0.5 rounded-full font-semibold ${pair.status === 'closed' ? 'bg-gray-200 text-gray-700' : 'bg-blue-100 text-blue-700'}`}>
+                                                                                {pair.status === 'closed' ? 'Closed' : 'Open'}
+                                                                            </span>
+                                                                        </td>
+                                                                        <td className="py-2 text-right text-gray-700">{pair.quantity.toFixed(4)}</td>
+                                                                        <td className="py-2 pl-4">
+                                                                            <span className="font-medium text-green-700">BUY</span> @ {formatCurrency(pair.entryPrice)}
+                                                                            <span className="text-gray-400 ml-2">{formatDateShort(pair.entryTrade.tradeDate)}</span>
+                                                                        </td>
+                                                                        <td className="py-2 pl-4">
+                                                                            {pair.exitTrade ? (
+                                                                                <>
+                                                                                    <span className="font-medium text-red-700">SELL</span> @ {formatCurrency(pair.exitPrice)}
+                                                                                    <span className="text-gray-400 ml-2">{formatDateShort(pair.exitTrade.tradeDate)}</span>
+                                                                                </>
+                                                                            ) : (
+                                                                                <span className="text-gray-400">-</span>
+                                                                            )}
+                                                                        </td>
+                                                                        <td className={`py-2 text-right font-semibold ${pair.realizedPl !== null ? (pair.realizedPl > 0 ? 'text-green-600' : pair.realizedPl < 0 ? 'text-red-600' : 'text-gray-600') : 'text-gray-400'}`}>
+                                                                            {pair.realizedPl !== null ? formatCurrency(pair.realizedPl) : '-'}
+                                                                        </td>
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </React.Fragment>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )
                     ) : (
                         <div className="px-6 py-16 text-center">
                             <svg className="mx-auto h-12 w-12 text-gray-400 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

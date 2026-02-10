@@ -1,0 +1,20 @@
+# Backend configuration for OCI Object Storage (S3-compatible)
+# Usage: terraform init -backend-config=backend.hcl
+
+bucket                      = "terraform-state-trade-journal"
+key                         = "oci/terraform.tfstate"
+region                      = "us-sanjose-1"
+endpoint                    = "https://YOUR_NAMESPACE.compat.objectstorage.us-sanjose-1.oraclecloud.com"
+skip_region_validation      = true
+skip_credentials_validation = true
+skip_metadata_api_check     = true
+force_path_style            = true
+
+# Note: Replace YOUR_NAMESPACE with your Object Storage namespace
+# Get namespace: oci os ns get --query data --raw-output
+
+# Create bucket before first use:
+# oci os bucket create \
+#   --compartment-id <compartment-ocid> \
+#   --name terraform-state-trade-journal \
+#   --namespace <your-namespace>

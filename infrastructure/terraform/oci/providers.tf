@@ -1,0 +1,47 @@
+terraform {
+  required_version = ">= 1.0"
+
+  required_providers {
+    oci = {
+      source  = "oracle/oci"
+      version = "~> 5.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.5"
+    }
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.4"
+    }
+  }
+
+  # Remote state backend - Choose one option below:
+
+  # OPTION 1: Terraform Cloud (Recommended - includes state locking)
+  # Uncomment and configure:
+  cloud {
+    organization = "tradejournalv2"
+    workspaces {
+      name = "tradejournal"
+    }
+  }
+
+  # OPTION 2: OCI Object Storage (S3-compatible)
+  # Requires creating backend.hcl file with namespace
+  # See: infrastructure/terraform/oci/backend.hcl.example
+  # Run: terraform init -backend-config=backend.hcl
+
+  # OPTION 3: GitHub (using http backend)
+  # Stores state in GitHub repository as artifact
+  # Requires GitHub token with repo access
+  # See: infrastructure/terraform/oci/backend-github.hcl.example
+}
+
+provider "oci" {
+  tenancy_ocid = var.tenancy_ocid
+  user_ocid    = var.user_ocid
+  fingerprint  = var.fingerprint
+  private_key  = var.private_key
+  region       = var.region
+}

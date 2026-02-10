@@ -5,12 +5,12 @@ resource "oci_database_autonomous_database" "trade_journal_db" {
   display_name             = "${var.app_name}-db"
   db_workload              = "OLTP" # Transaction Processing
   
-  # Resource allocation
+  # Resource allocation - Free Tier is limited to 1 OCPU and 20GB storage
   cpu_core_count           = 1
-  data_storage_size_in_tbs = 1
+  data_storage_size_in_tbs = 1 
   
-  # Auto-scaling
-  is_auto_scaling_enabled  = true
+  # Auto-scaling (Must be disabled for Free Tier)
+  is_auto_scaling_enabled  = false
   
   # Password configuration
   admin_password           = var.db_admin_password
@@ -20,13 +20,13 @@ resource "oci_database_autonomous_database" "trade_journal_db" {
   
   # Network access - allow from anywhere (secured by authentication)
   # For production, consider using private endpoint
-  whitelisted_ips          = []
+  whitelisted_ips          = ["0.0.0.0/0"]
   
   # Backup configuration
-  is_auto_scaling_for_storage_enabled = true
+  is_auto_scaling_for_storage_enabled = false
   
-  # Free tier - set to true if using always free tier
-  # is_free_tier = true  # Uncomment for free tier
+  # Free tier - must be explicitly enabled
+  is_free_tier = true
   
   # Lifecycle configuration
   is_mtls_connection_required = false  # Set to true for mutual TLS

@@ -27,9 +27,20 @@ resource "oci_database_autonomous_database" "trade_journal_db" {
   
   # Free tier - must be explicitly enabled
   is_free_tier = true
-  
+
   # Lifecycle configuration
   is_mtls_connection_required = false  # Set to true for mutual TLS
+
+  # Ignore changes to attributes managed by OCI for Always Free tier
+  # Free tier databases have fixed resource allocations that can't be modified
+  lifecycle {
+    ignore_changes = [
+      cpu_core_count,              # Always Free tier manages this internally
+      data_storage_size_in_tbs,    # Fixed at 20GB for Always Free
+      is_auto_scaling_enabled,     # Always disabled for Free tier
+      is_auto_scaling_for_storage_enabled
+    ]
+  }
 }
 
 # Database Wallet (for secure connections)

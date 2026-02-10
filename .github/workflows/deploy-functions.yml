@@ -1,0 +1,651 @@
+name: Deploy OCI Functions
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/functions/**'
+      - '.github/workflows/deploy-functions.yml'
+  pull_request:
+    paths:
+      - 'backend/functions/**'
+  workflow_dispatch:  # Allow manual trigger
+    inputs:
+      functions:
+        description: 'Comma-separated list of functions to deploy (or "all")'
+        required: false
+        default: 'all'
+
+env:
+  OCI_CLI_USER: ${{ secrets.OCI_USER_OCID }}
+  OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+  OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+  OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_PRIVATE_KEY }}
+  OCI_CLI_REGION: ${{ secrets.OCI_REGION }}
+  COMPARTMENT_ID: ${{ secrets.OCI_COMPARTMENT_ID }}
+  APP_NAME: trade-journal
+  # OCIR settings - namespace from Terraform, region from secrets
+  OCIR_REGION: sjc  # us-sanjose-1 -> sjc
+  OCIR_REGISTRY: ${{ secrets.OCI_REGION == 'us-sanjose-1' && 'sjc' || secrets.OCI_REGION }}.ocir.io
+
+jobs:
+  detect-changes:
+    name: Detect Changed Functions
+    runs-on: ubuntu-latest
+    outputs:
+      shared: ${{ steps.changes.outputs.shared }}
+      health-check: ${{ steps.changes.outputs.health-check }}
+      trades-api: ${{ steps.changes.outputs.trades-api }}
+      sync-processor: ${{ steps.changes.outputs.sync-processor }}
+      db-migrate: ${{ steps.changes.outputs.db-migrate }}
+      all: ${{ steps.changes.outputs.all }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changes
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            # Manual trigger - use input parameter
+            if [ "${{ github.event.inputs.functions }}" == "all" ]; then
+              echo "shared=true" >> $GITHUB_OUTPUT
+              echo "health-check=true" >> $GITHUB_OUTPUT
+              echo "trades-api=true" >> $GITHUB_OUTPUT
+              echo "sync-processor=true" >> $GITHUB_OUTPUT
+              echo "db-migrate=true" >> $GITHUB_OUTPUT
+              echo "all=true" >> $GITHUB_OUTPUT
+            else
+              IFS=',' read -ra FUNCS <<< "${{ github.event.inputs.functions }}"
+              for func in "${FUNCS[@]}"; do
+                echo "${func}=true" >> $GITHUB_OUTPUT
+              done
+            fi
+          else
+            # Automatic trigger - detect file changes
+            if git diff --name-only HEAD^ HEAD | grep -q "backend/functions/shared/"; then
+              echo "shared=true" >> $GITHUB_OUTPUT
+              # If shared changes, rebuild all functions
+              echo "health-check=true" >> $GITHUB_OUTPUT
+              echo "trades-api=true" >> $GITHUB_OUTPUT
+              echo "sync-processor=true" >> $GITHUB_OUTPUT
+              echo "db-migrate=true" >> $GITHUB_OUTPUT
+              echo "all=true" >> $GITHUB_OUTPUT
+            else
+              if git diff --name-only HEAD^ HEAD | grep -q "backend/functions/health-check/"; then
+                echo "health-check=true" >> $GITHUB_OUTPUT
+              fi
+              if git diff --name-only HEAD^ HEAD | grep -q "backend/functions/trades-api/"; then
+                echo "trades-api=true" >> $GITHUB_OUTPUT
+              fi
+              if git diff --name-only HEAD^ HEAD | grep -q "backend/functions/sync-processor/"; then
+                echo "sync-processor=true" >> $GITHUB_OUTPUT
+              fi
+              if git diff --name-only HEAD^ HEAD | grep -q "backend/functions/db-migrate/"; then
+                echo "db-migrate=true" >> $GITHUB_OUTPUT
+              fi
+            fi
+          fi
+
+  setup:
+    name: Setup Deployment Config
+    runs-on: ubuntu-latest
+    outputs:
+      namespace: ${{ steps.get-namespace.outputs.namespace }}
+      registry: ${{ steps.get-namespace.outputs.registry }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install OCI CLI
+        run: |
+          curl -L -O https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh
+          chmod +x install.sh
+          ./install.sh --accept-all-defaults
+          echo "$HOME/bin" >> $GITHUB_PATH
+          export PATH="$HOME/bin:$PATH"
+
+      - name: Configure OCI CLI
+        run: |
+          mkdir -p ~/.oci
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=${{ secrets.OCI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ secrets.OCI_REGION }}
+          key_file=~/.oci/oci_api_key.pem
+          EOF
+          chmod 600 ~/.oci/config
+
+      - name: Get OCI Namespace from API
+        id: get-namespace
+        run: |
+          # Get namespace directly from OCI Object Storage API
+          NAMESPACE=$(oci os ns get --query 'data' --raw-output)
+
+          REGION_CODE="${{ secrets.OCI_REGION }}"
+          # Convert region to registry code (e.g., us-sanjose-1 -> sjc)
+          case "$REGION_CODE" in
+            us-sanjose-1) REGISTRY_REGION="sjc" ;;
+            us-ashburn-1) REGISTRY_REGION="iad" ;;
+            us-phoenix-1) REGISTRY_REGION="phx" ;;
+            eu-frankfurt-1) REGISTRY_REGION="fra" ;;
+            uk-london-1) REGISTRY_REGION="lhr" ;;
+            ap-tokyo-1) REGISTRY_REGION="nrt" ;;
+            ap-mumbai-1) REGISTRY_REGION="bom" ;;
+            *) REGISTRY_REGION="$REGION_CODE" ;;
+          esac
+
+          echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
+          echo "registry=${REGISTRY_REGION}.ocir.io/${NAMESPACE}/tradejournalv2" >> $GITHUB_OUTPUT
+
+          echo "✅ Namespace: $NAMESPACE"
+          echo "✅ Registry: ${REGISTRY_REGION}.ocir.io/${NAMESPACE}/tradejournalv2"
+
+  build-shared:
+    name: Build Shared Library
+    runs-on: ubuntu-latest
+    needs: [detect-changes, setup]
+    if: needs.detect-changes.outputs.shared == 'true' || needs.detect-changes.outputs.all == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build shared library
+        working-directory: backend/functions/shared
+        run: mvn clean install -s local-settings.xml -DskipTests
+
+      - name: Upload shared library artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: functions-shared
+          path: backend/functions/shared/target/functions-shared-*.jar
+          retention-days: 1
+
+  deploy-trades-api:
+    name: Deploy trades-api
+    runs-on: ubuntu-latest
+    needs: [detect-changes, setup, build-shared]
+    if: |
+      !failure() && !cancelled() &&
+      (needs.detect-changes.outputs.trades-api == 'true' || needs.detect-changes.outputs.all == 'true')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download shared library
+        uses: actions/download-artifact@v4
+        with:
+          name: functions-shared
+          path: backend/functions/trades-api/lib/
+
+      - name: Rename shared JAR
+        run: |
+          cd backend/functions/trades-api/lib
+          # Only rename if needed
+          if [ ! -f functions-shared-1.0.0-SNAPSHOT.jar ]; then
+            mv functions-shared-*.jar functions-shared-1.0.0-SNAPSHOT.jar
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to OCIR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.OCIR_REGISTRY }}
+          # OCIR username format: <namespace>/<username> or <namespace>/oracleidentitycloudservice/<email>
+          username: ${{ needs.setup.outputs.namespace }}/${{ secrets.OCI_USERNAME }}
+          password: ${{ secrets.OCI_AUTH_TOKEN }}
+
+      - name: Extract function version
+        id: version
+        working-directory: backend/functions/trades-api
+        run: |
+          VERSION=$(grep '^version:' func.yaml | awk '{print $2}')
+          PATCH=$(echo $VERSION | cut -d. -f3)
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION=$(echo $VERSION | cut -d. -f1-2).$NEW_PATCH
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          sed -i "s/^version: .*/version: $NEW_VERSION/" func.yaml
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: backend/functions/trades-api
+          file: backend/functions/trades-api/Dockerfile
+          push: true
+          tags: ${{ needs.setup.outputs.registry }}/trades-api:${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install and Configure OCI CLI
+        run: |
+          # Install OCI CLI
+          curl -L -O https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh
+          chmod +x install.sh
+          ./install.sh --accept-all-defaults
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+          # Configure OCI CLI
+          mkdir -p ~/.oci
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=${{ secrets.OCI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ secrets.OCI_REGION }}
+          key_file=~/.oci/oci_api_key.pem
+          EOF
+          chmod 600 ~/.oci/config
+
+      - name: Create or Update function
+        run: |
+          # Get compartment ID and app ID
+          COMPARTMENT_ID="${{ secrets.OCI_COMPARTMENT_ID }}"
+          APP_NAME="${{ vars.APP_NAME || 'trade-journal' }}"
+
+          # Look up app ID by name
+          APP_ID=$(oci fn application list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --all \
+            --query "data[?\"display-name\"=='${APP_NAME}'].id | [0]" \
+            --raw-output)
+
+          # Check if function exists
+          FUNC_OCID=$(oci fn function list \
+            --application-id "$APP_ID" \
+            --all \
+            --query "data[?\"display-name\"=='trades-api'].id | [0]" \
+            --raw-output 2>/dev/null || echo "")
+
+          IMAGE="${{ needs.setup.outputs.registry }}/trades-api:${{ steps.version.outputs.version }}"
+
+          # Debug output
+          echo "📋 App Name: $APP_NAME"
+          echo "📋 Image: $IMAGE"
+          echo "📋 Function OCID: ${FUNC_OCID:-none}"
+
+          if [ -z "$FUNC_OCID" ] || [ "$FUNC_OCID" = "null" ]; then
+            echo "Creating new function: trades-api"
+            oci fn function create \
+              --application-id "$APP_ID" \
+              --display-name "trades-api" \
+              --image "$IMAGE" \
+              --memory-in-mbs 256 \
+              --timeout-in-seconds 30
+          else
+            echo "Updating existing function: trades-api (ID: $FUNC_OCID)"
+            oci fn function update \
+              --function-id "$FUNC_OCID" \
+              --image "$IMAGE" \
+              --force
+          fi
+
+      - name: Commit version bump
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add backend/functions/trades-api/func.yaml
+          git commit -m "chore: bump trades-api to ${{ steps.version.outputs.version }}"
+          git push
+
+  deploy-sync-processor:
+    name: Deploy sync-processor
+    runs-on: ubuntu-latest
+    needs: [detect-changes, setup, build-shared]
+    if: |
+      !failure() && !cancelled() &&
+      (needs.detect-changes.outputs.sync-processor == 'true' || needs.detect-changes.outputs.all == 'true')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download shared library
+        uses: actions/download-artifact@v4
+        with:
+          name: functions-shared
+          path: backend/functions/sync-processor/lib/
+
+      - name: Rename shared JAR
+        run: |
+          cd backend/functions/sync-processor/lib
+          # Only rename if needed
+          if [ ! -f functions-shared-1.0.0-SNAPSHOT.jar ]; then
+            mv functions-shared-*.jar functions-shared-1.0.0-SNAPSHOT.jar
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to OCIR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.OCIR_REGISTRY }}
+          username: ${{ needs.setup.outputs.namespace }}/${{ secrets.OCI_USERNAME }}
+          password: ${{ secrets.OCI_AUTH_TOKEN }}
+
+      - name: Extract function version
+        id: version
+        working-directory: backend/functions/sync-processor
+        run: |
+          VERSION=$(grep '^version:' func.yaml | awk '{print $2}')
+          PATCH=$(echo $VERSION | cut -d. -f3)
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION=$(echo $VERSION | cut -d. -f1-2).$NEW_PATCH
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          sed -i "s/^version: .*/version: $NEW_VERSION/" func.yaml
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: backend/functions/sync-processor
+          file: backend/functions/sync-processor/Dockerfile
+          push: true
+          tags: ${{ needs.setup.outputs.registry }}/sync-processor:${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install and Configure OCI CLI
+        run: |
+          # Install OCI CLI
+          curl -L -O https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh
+          chmod +x install.sh
+          ./install.sh --accept-all-defaults
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+          # Configure OCI CLI
+          mkdir -p ~/.oci
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=${{ secrets.OCI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ secrets.OCI_REGION }}
+          key_file=~/.oci/oci_api_key.pem
+          EOF
+          chmod 600 ~/.oci/config
+
+      - name: Create or Update function
+        run: |
+          # Get compartment ID and app ID
+          COMPARTMENT_ID="${{ secrets.OCI_COMPARTMENT_ID }}"
+          APP_NAME="${{ vars.APP_NAME || 'trade-journal' }}"
+
+          # Look up app ID by name
+          APP_ID=$(oci fn application list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --all \
+            --query "data[?\"display-name\"=='${APP_NAME}'].id | [0]" \
+            --raw-output)
+
+          # Check if function exists
+          FUNC_OCID=$(oci fn function list \
+            --application-id "$APP_ID" \
+            --all \
+            --query "data[?\"display-name\"=='sync-processor'].id | [0]" \
+            --raw-output 2>/dev/null || echo "")
+
+          IMAGE="${{ needs.setup.outputs.registry }}/sync-processor:${{ steps.version.outputs.version }}"
+
+          # Debug output
+          echo "📋 App Name: $APP_NAME"
+          echo "📋 Image: $IMAGE"
+          echo "📋 Function OCID: ${FUNC_OCID:-none}"
+
+          if [ -z "$FUNC_OCID" ] || [ "$FUNC_OCID" = "null" ]; then
+            echo "Creating new function: sync-processor"
+            oci fn function create \
+              --application-id "$APP_ID" \
+              --display-name "sync-processor" \
+              --image "$IMAGE" \
+              --memory-in-mbs 256 \
+              --timeout-in-seconds 120
+          else
+            echo "Updating existing function: sync-processor (ID: $FUNC_OCID)"
+            oci fn function update \
+              --function-id "$FUNC_OCID" \
+              --image "$IMAGE" \
+              --force
+          fi
+
+      - name: Commit version bump
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add backend/functions/sync-processor/func.yaml
+          git commit -m "chore: bump sync-processor to ${{ steps.version.outputs.version }}"
+          git push
+
+  deploy-health-check:
+    name: Deploy health-check
+    runs-on: ubuntu-latest
+    needs: [detect-changes, setup]
+    if: needs.detect-changes.outputs.health-check == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to OCIR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.OCIR_REGISTRY }}
+          username: ${{ needs.setup.outputs.namespace }}/${{ secrets.OCI_USERNAME }}
+          password: ${{ secrets.OCI_AUTH_TOKEN }}
+
+      - name: Extract function version
+        id: version
+        working-directory: backend/functions/health-check
+        run: |
+          VERSION=$(grep '^version:' func.yaml | awk '{print $2}')
+          PATCH=$(echo $VERSION | cut -d. -f3)
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION=$(echo $VERSION | cut -d. -f1-2).$NEW_PATCH
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          sed -i "s/^version: .*/version: $NEW_VERSION/" func.yaml
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: backend/functions/health-check
+          push: true
+          tags: ${{ needs.setup.outputs.registry }}/health-check:${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install and Configure OCI CLI
+        run: |
+          # Install OCI CLI
+          curl -L -O https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh
+          chmod +x install.sh
+          ./install.sh --accept-all-defaults
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+          # Configure OCI CLI
+          mkdir -p ~/.oci
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=${{ secrets.OCI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ secrets.OCI_REGION }}
+          key_file=~/.oci/oci_api_key.pem
+          EOF
+          chmod 600 ~/.oci/config
+
+      - name: Create or Update function
+        run: |
+          # Get compartment ID and app ID
+          COMPARTMENT_ID="${{ secrets.OCI_COMPARTMENT_ID }}"
+          APP_NAME="${{ vars.APP_NAME || 'trade-journal' }}"
+
+          # Look up app ID by name
+          APP_ID=$(oci fn application list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --all \
+            --query "data[?\"display-name\"=='${APP_NAME}'].id | [0]" \
+            --raw-output)
+
+          # Check if function exists
+          FUNC_OCID=$(oci fn function list \
+            --application-id "$APP_ID" \
+            --all \
+            --query "data[?\"display-name\"=='health-check'].id | [0]" \
+            --raw-output 2>/dev/null || echo "")
+
+          IMAGE="${{ needs.setup.outputs.registry }}/health-check:${{ steps.version.outputs.version }}"
+
+          # Debug output
+          echo "📋 App Name: $APP_NAME"
+          echo "📋 Image: $IMAGE"
+          echo "📋 Function OCID: ${FUNC_OCID:-none}"
+
+          if [ -z "$FUNC_OCID" ] || [ "$FUNC_OCID" = "null" ]; then
+            echo "Creating new function: health-check"
+            oci fn function create \
+              --application-id "$APP_ID" \
+              --display-name "health-check" \
+              --image "$IMAGE" \
+              --memory-in-mbs 256 \
+              --timeout-in-seconds 30
+          else
+            echo "Updating existing function: health-check (ID: $FUNC_OCID)"
+            oci fn function update \
+              --function-id "$FUNC_OCID" \
+              --image "$IMAGE" \
+              --force
+          fi
+
+  deploy-db-migrate:
+    name: Deploy db-migrate
+    runs-on: ubuntu-latest
+    needs: [setup, build-shared]
+    if: needs.detect-changes.outputs.db-migrate == 'true' || needs.detect-changes.outputs.all == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download shared library
+        uses: actions/download-artifact@v4
+        with:
+          name: functions-shared
+          path: backend/functions/db-migrate/lib/
+
+      - name: Generate version
+        id: version
+        run: |
+          VERSION="0.0.$(date +%s)"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to OCIR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.OCIR_REGISTRY }}
+          username: ${{ needs.setup.outputs.namespace }}/${{ secrets.OCI_USERNAME }}
+          password: ${{ secrets.OCI_AUTH_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend/functions/db-migrate
+          push: true
+          tags: ${{ needs.setup.outputs.registry }}/db-migrate:${{ steps.version.outputs.version }}
+          cache-from: type=registry,ref=${{ needs.setup.outputs.registry }}/db-migrate:latest
+          cache-to: type=inline
+
+      - name: Install and Configure OCI CLI
+        run: |
+          # Install OCI CLI
+          curl -L -O https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh
+          chmod +x install.sh
+          ./install.sh --accept-all-defaults
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+          # Configure OCI CLI
+          mkdir -p ~/.oci
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=${{ secrets.OCI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ secrets.OCI_REGION }}
+          key_file=~/.oci/oci_api_key.pem
+          EOF
+          chmod 600 ~/.oci/config
+
+      - name: Create or Update function
+        run: |
+          # Get compartment ID and app ID
+          COMPARTMENT_ID="${{ secrets.OCI_COMPARTMENT_ID }}"
+          APP_NAME="${{ vars.APP_NAME || 'trade-journal' }}"
+
+          # Look up app ID by name
+          APP_ID=$(oci fn application list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --all \
+            --query "data[?\"display-name\"=='${APP_NAME}'].id | [0]" \
+            --raw-output)
+
+          # Check if function exists
+          FUNC_OCID=$(oci fn function list \
+            --application-id "$APP_ID" \
+            --all \
+            --query "data[?\"display-name\"=='db-migrate'].id | [0]" \
+            --raw-output 2>/dev/null || echo "")
+
+          IMAGE="${{ needs.setup.outputs.registry }}/db-migrate:${{ steps.version.outputs.version }}"
+
+          # Debug output
+          echo "📋 App Name: $APP_NAME"
+          echo "📋 Image: $IMAGE"
+          echo "📋 Function OCID: ${FUNC_OCID:-none}"
+
+          if [ -z "$FUNC_OCID" ] || [ "$FUNC_OCID" = "null" ]; then
+            echo "Creating new function: db-migrate"
+            oci fn function create \
+              --application-id "$APP_ID" \
+              --display-name "db-migrate" \
+              --image "$IMAGE" \
+              --memory-in-mbs 512 \
+              --timeout-in-seconds 300
+          else
+            echo "Updating existing function: db-migrate (ID: $FUNC_OCID)"
+            oci fn function update \
+              --function-id "$FUNC_OCID" \
+              --image "$IMAGE" \
+              --force
+          fi

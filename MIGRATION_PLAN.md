@@ -26,228 +26,75 @@ Cloudflare (CDN/Security) → Vercel (Frontend) → OCI Functions (Backend) → 
 
 ---
 
-## Phase 1: Prerequisites and Account Setup (Week 1-2)
+## ✅ Phase 1: Infrastructure (Completed)
 
-### 1.1 Account Creation
+**Status:** Deployed via Terraform & GitHub Actions.
 
-**Oracle Cloud Infrastructure (OCI)**
-- Sign up for Oracle Cloud Free Tier: https://www.oracle.com/cloud/free/
-- Always-Free Resources:
-  - 2 AMD Compute instances (1/8 OCPU, 1GB RAM each)
-  - 2 Autonomous Databases (1 OCPU, 20GB storage each)
-  - 10GB Object Storage
-  - 10TB/month outbound data transfer
-  - Functions: 2 million invocations/month, 400K GB-seconds
-  - Long-running function support: up to 1 hour per execution
-
-**Installation:**
-```bash
-# Install OCI CLI
-bash -c "$(curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh)"
-
-# Configure with API keys
-oci setup config
-```
-
-**Vercel**
-- Sign up: https://vercel.com/signup
-- Hobby Plan (Free):
-  - 100GB bandwidth/month
-  - 6,000 build minutes/month
-  - Unlimited deployments
-  - Automatic SSL
-
-```bash
-npm i -g vercel
-vercel login
-```
-
-**Cloudflare**
-- Create account: https://dash.cloudflare.com/sign-up
-- Free Plan:
-  - Unlimited requests
-  - Global CDN (195+ locations)
-  - DDoS protection
-  - Free SSL/TLS
-  - 100k Workers requests/day
-
-**GitHub**
-- Create repository for version control
-- Generate Personal Access Token for CI/CD
-
-### 1.2 Local Development Tools
-
-```bash
-# Required tools
-java --version      # Java 11+
-node --version      # Node.js 18+
-mvn --version       # Maven
-docker --version    # Docker for local testing
-
-# Install Fn Project CLI (for OCI Functions)
-curl -LSs https://raw.githubusercontent.com/fnproject/cli/master/install | sh
-
-# Install Terraform (infrastructure as code)
-brew install terraform  # or appropriate package manager
-```
+- **Networking:** VCN, Subnets, Internet Gateway ([x] `network.tf`)
+- **Database:** Autonomous Database (Free Tier) ([x] `database.tf`)
+- **Storage:** Object Storage Buckets ([x] `storage.tf`)
+- **API Gateway:** Gateway & Deployment ([x] `api-gateway.tf`)
+- **CI/CD:** GitHub Actions Workflow ([x] `terraform-deploy.yml`)
 
 ---
 
-## Phase 2: Infrastructure Provisioning (Week 3-4)
+## 🔄 Phase 2: Application Migration (In Progress)
 
-### 2.1 Directory Structure
+### 2.1 Backend Architecture (Grouped Functions)
 
-```
-/infrastructure
-  /terraform
-    /oci
-      - main.tf
-      - variables.tf
-      - outputs.tf
-      - autonomous-db.tf
-      - object-storage.tf
-      - functions.tf
-      - vcn.tf
-    /cloudflare
-      - main.tf
-      - dns.tf
-      - page-rules.tf
-```
+| Group | Function | Type | Status | Route | Description |
+|-------|----------|------|--------|-------|-------------|
+| **Interactive** | `trades-api` | Sync | **Implemented** (Pending Deploy) | `GET/POST /trades` | Handles UI requests, stats, and **Job Polling**. |
+| **Background** | `sync-processor` | Async | **Implemented** (Pending Deploy) | `POST /sync` | Fetches trades from SnapTrade. Updates Job Status. |
+| **Background** | `reports-processor` | Async | Pending | `POST /reports` | Generates PDFs. Updates Job Status. |
 
-### 2.2 Oracle Cloud Resources (Terraform)
+### 2.2 Async Polling Architecture
 
-**autonomous-db.tf:**
-```hcl
-resource "oci_database_autonomous_database" "trade_journal_db" {
-  compartment_id           = var.compartment_id
-  db_name                  = "tradejournaldb"
-  display_name            = "Trade Journal Database"
-  admin_password          = var.db_admin_password
-  cpu_core_count          = 1
-  data_storage_size_in_tbs = 1
-  db_version              = "19c"
-  is_free_tier            = true
-  license_model           = "LICENSE_INCLUDED"
-  is_auto_scaling_enabled = false
-}
+To handle long-running processes (Sync, Reports) without timeouts:
 
-resource "oci_database_autonomous_database_wallet" "trade_journal_wallet" {
-  autonomous_database_id = oci_database_autonomous_database.trade_journal_db.id
-  password              = var.wallet_password
-  base64_encode_content = true
-}
-```
+1.  **Initiation:**
+    -   Client calls `POST /api/sync`.
+    -   API Gateway triggers `sync-processor`.
+    -   Function creates a `Job` record in DB with `status=QUEUED`.
+    -   Function returns `202 Accepted` with `{"jobId": "uuid"}`.
+2.  **Processing:**
+    -   `sync-processor` continues in background.
+    -   Updates DB record to `PROCESSING` -> `COMPLETED` / `FAILED`.
+3.  **Polling:**
+    -   Client polls `GET /api/jobs/{jobId}` (handled by `trades-api`).
+    -   Returns current status and result summary.
 
-**object-storage.tf:**
-```hcl
-resource "oci_objectstorage_bucket" "trade_journal_storage" {
-  compartment_id = var.compartment_id
-  namespace      = data.oci_objectstorage_namespace.ns.namespace
-  name           = "trade-journal-files"
-  access_type    = "NoPublicAccess"
-  versioning     = "Enabled"
-}
-```
+**Infrastructure Helper:**
+- **Job Status Table:** A `job_status` table in Autonomous DB to track state.
 
-**functions.tf:**
-```hcl
-resource "oci_functions_application" "trade_journal_app" {
-  compartment_id = var.compartment_id
-  display_name   = "trade-journal"
-  subnet_ids     = [oci_core_subnet.functions_subnet.id]
+### 2.3 Shared Library (`functions-shared`) - ✅ Completed
 
-  config = {
-    DB_CONNECTION_STRING = oci_database_autonomous_database.trade_journal_db.connection_strings[0].profiles[0].value
-    OBJECT_STORAGE_NAMESPACE = data.oci_objectstorage_namespace.ns.namespace
-    OBJECT_STORAGE_BUCKET    = oci_objectstorage_bucket.trade_journal_storage.name
-  }
-}
-```
+- **Models:** `Trade`, `BrokerAccount`, `User`, `JobStatus` (POJOs, Lombok removed)
+- **Utilities:** `DatabaseClient` (Switched to **Oracle JDBC** `ojdbc11` + `vertx-jdbc-client`)
+- **Architecture:** Shared code packaged as a Maven dependency.
+- **Build Status:** Successfully built with `local-settings.xml` to bypass internal Artifactory.
 
-**Deploy:**
-```bash
-cd infrastructure/terraform/oci
-terraform init
-terraform plan
-terraform apply
-```
+### 2.4 Validation & Testing
 
-### 2.3 Cloudflare Configuration
+- **Testing Guide:** Detailed testing steps for `health-check`, `trades-api`, and `sync-processor` are documented in [TESTING.md](./TESTING.md).
+- **Validation Status:**
+    - [x] Health Check (Remote OCI)
+    - [ ] Trades API (Pending Deploy)
+    - [ ] Sync Processor (Pending Deploy)
 
-**DNS & CDN Setup:**
-```hcl
-resource "cloudflare_zone" "domain" {
-  zone = var.domain_name
-}
-
-resource "cloudflare_record" "vercel" {
-  zone_id = cloudflare_zone.domain.id
-  name    = var.subdomain
-  value   = "cname.vercel-dns.com"
-  type    = "CNAME"
-  proxied = true
-}
-
-resource "cloudflare_record" "api" {
-  zone_id = cloudflare_zone.domain.id
-  name    = "api"
-  value   = var.oci_api_gateway_endpoint
-  type    = "CNAME"
-  proxied = true
-}
-
-resource "cloudflare_page_rule" "api_cache" {
-  zone_id = cloudflare_zone.domain.id
-  target  = "api.${var.domain_name}/static/*"
-
-  actions {
-    cache_level = "cache_everything"
-  }
-}
-```
 
 ---
 
-## Phase 3: Backend Migration (Vert.x → OCI Functions) (Week 5-8)
+## ⏳ Phase 3: Frontend & Cloudflare (Pending)
 
-### 3.1 Architecture Transformation
+### 3.1 Next.js Frontend
+-   **Vercel Deployment:** Connect to GitHub.
+-   **API Integration:** Point to Cloudflare/API Gateway.
+-   **Polling Hook:** Implement `useJobPoll(jobId)` for UX.
 
-**Migration Strategy:**
-1. Convert Vert.x verticles to stateless OCI Functions
-2. Replace gRPC with REST/HTTP (OCI Functions use HTTP triggers)
-3. Externalize state to Redis/Database
-4. Long-running operations: Use detached mode (1 hour timeout)
-
-### 3.2 Function Structure
-
-```
-/backend
-  /functions
-    /trades
-      - func.yaml
-      - pom.xml
-      - src/main/java/com/zenith/trade/
-        - CreateTradeFunction.java
-        - GetTradesFunction.java
-        - UpdateTradeFunction.java
-        - DeleteTradeFunction.java
-    /reports
-      - func.yaml
-      - pom.xml
-      - src/main/java/com/zenith/trade/
-        - GenerateReportFunction.java (long-running, up to 1 hour)
-    /reconciliation
-      - func.yaml
-      - pom.xml
-      - src/main/java/com/zenith/trade/
-        - ReconcileTradesFunction.java (long-running)
-    /shared
-      - pom.xml
-      - src/main/java/com/zenith/trade/shared/
-        - DatabaseClient.java
-        - ObjectStorageClient.java
-        - models/
-```
+### 3.2 Cloudflare
+-   **DNS:** Proxy traffic to Vercel (Frontend) and OCI API Gateway (Backend).
+-   **Caching:** Cache static assets.
 
 ### 3.3 Sample Function Implementation
 

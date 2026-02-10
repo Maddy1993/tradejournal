@@ -10,7 +10,8 @@ resource "oci_functions_application" "trade_journal_app" {
 
     # Database connection (functions will use resource principal to access)
     DB_OCID                  = oci_database_autonomous_database.trade_journal_db.id
-    DB_CONNECTION_STRING     = oci_database_autonomous_database.trade_journal_db.connection_urls[0].apex_url
+    # Use JDBC connection string (MEDIUM priority for balanced performance)
+    DB_CONNECTION_STRING     = oci_database_autonomous_database.trade_journal_db.connection_strings[0].all_connection_strings["MEDIUM"]
     DB_NAME                  = oci_database_autonomous_database.trade_journal_db.db_name
     DB_USER                  = "ADMIN"
 
@@ -37,7 +38,7 @@ resource "oci_functions_application" "trade_journal_app" {
 
   # Tracing
   trace_config {
-    is_enabled = true
+    is_enabled = false
   }
 
   # Ensure IAM policies are created first

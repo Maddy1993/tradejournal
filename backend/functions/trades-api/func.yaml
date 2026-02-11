@@ -1,0 +1,13 @@
+schema_version: 20180708
+name: trades-api
+version: 0.0.5
+runtime: java
+build_image: fnproject/fn-java-fdk-build:jdk11-1.0.157
+run_image: fnproject/fn-java-fdk:jre11-1.0.157
+cmd: com.zenith.trade.TradesApiFunction::handleRequest
+memory: 256
+timeout: 30
+triggers:
+- name: trades-trigger
+  type: http
+  source: /trades

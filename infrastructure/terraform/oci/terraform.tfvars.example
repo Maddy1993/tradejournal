@@ -1,0 +1,23 @@
+# OCI Terraform Variables
+# Copy this file to terraform.tfvars and fill in your actual values
+
+# OCI Authentication
+tenancy_ocid     = "ocid1.tenancy.oc1..aaaaaaaaoe2titp5eb46nexp2rozoath6jd3w6cbwt4rxkymggjc5tuf5kaq"
+user_ocid        = "ocid1.user.oc1..aaaaaaaaXXXXXXXXXXXX"  # Get from: Profile → User Settings
+fingerprint      = "xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx"  # Get from: API Keys page
+private_key_path = "~/.oci/oci_api_key.pem"
+region           = "us-sanjose-1"
+compartment_id   = "ocid1.compartment.oc1..aaaaaaaameyhu7sgwehn47flwdws5ayf4exg34uxut4ajthf6haqwogstzwa"
+
+# Database Configuration
+db_admin_password   = "YourSecurePassword123!"  # Change this!
+db_wallet_password  = "YourWalletPassword123!"  # Change this!
+
+# Application Configuration
+app_name    = "trade-journal"
+environment = "production"
+
+# Network Configuration (Optional - uses defaults if not specified)
+# vcn_cidr_block       = "10.0.0.0/16"
+# public_subnet_cidr   = "10.0.1.0/24"
+# private_subnet_cidr  = "10.0.2.0/24"

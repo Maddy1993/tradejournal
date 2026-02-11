@@ -1,0 +1,9 @@
+FROM fnproject/fnserver:latest as original
+
+FROM debian:bullseye-slim
+RUN apt-get update && apt-get install -y ca-certificates iptables procps && rm -rf /var/lib/apt/lists/*
+COPY --from=original /app/fnserver /app/fnserver
+COPY --from=original /usr/local/bin/preentry.sh /usr/local/bin/preentry.sh
+RUN chmod +x /usr/local/bin/preentry.sh
+WORKDIR /app
+CMD ["/usr/local/bin/preentry.sh", "./fnserver"]

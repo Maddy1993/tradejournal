@@ -183,3 +183,17 @@ nbdist/
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+frontend/.next/*
+frontend/node_modules/*
+.vscode/settings.json
+
+# Environment variables for local development
+.envrc
+.env
+.terraformrc
+
+# Terraform state and plans
+infrastructure/terraform/oci/.terraform/
+infrastructure/terraform/oci/.terraform.lock.hcl
+infrastructure/terraform/oci/terraform.tfstate*
+infrastructure/terraform/oci/tfplan
